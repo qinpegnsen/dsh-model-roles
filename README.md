@@ -18,6 +18,20 @@
 
 前提：已安装并配置 DSH，Web GUI 能正常列出至少一个可用模型。
 
+### 用包名安装（npm）
+
+在侧边栏 **插件 → 添加插件** 输入：
+
+```text
+dsh-model-roles
+```
+
+也可通过终端安装到 `web` profile：
+
+```bash
+dsh plugin --profile web add dsh-model-roles
+```
+
 ### 从 GitHub 安装
 
 在侧边栏 **插件 → 添加插件** 输入：
@@ -26,13 +40,13 @@
 https://github.com/qinpegnsen/dsh-model-roles.git
 ```
 
-安装完成后启用插件。也可通过终端安装到 `web` profile：
+安装完成后启用插件。终端安装：
 
 ```bash
 dsh plugin --profile web add https://github.com/qinpegnsen/dsh-model-roles.git
 ```
 
-若使用其他 profile，请替换 `web`。仓库包含构建产物，普通安装无需先构建，也无需另开 Web 服务器。
+若使用其他 profile，请替换 `web`。仓库与 npm 包均包含构建产物，普通安装无需先构建，也无需另开 Web 服务器。
 
 安装并启用后刷新 GUI，再打开一个普通对话，在输入框工具栏「权限」控件旁寻找 **双模型** 按钮。若看不到，先在插件页核对启用状态，再刷新页面。
 
@@ -117,9 +131,10 @@ npm test
 
 ## 发布约定
 
-本插件后续按 **GitHub + npm 同版本发布**。完成 npm 发布后，DSH「添加插件」可直接填写包名 `dsh-model-roles`；只存在 GitHub 仓库不代表 npm 包已发布。
+本插件按 **GitHub + npm 同版本发布**，两边版本号一致。
 
-当前首次 npm 发布尚未完成；在 registry 可以查询到公开版本之前，请继续使用上面的 GitHub 地址安装。
+- npm 包名：`dsh-model-roles`
+- GitHub：https://github.com/qinpegnsen/dsh-model-roles
 
 维护者发布步骤见 [双平台发布流程](https://github.com/qinpegnsen/dsh-model-roles/blob/main/docs/releasing.md)。
 

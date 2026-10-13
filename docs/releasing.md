@@ -73,4 +73,4 @@ git push origin "v<版本>"
 
 ## 首次 npm 发布状态
 
-GitHub 源码已经公开；首次 npm 发布正在准备，需先完成有效的 npm 登录。以 registry 的实际可查询版本为准，不以仓库存在代替 npm 发布成功。
+首次发布已完成：npm `dsh-model-roles@0.1.0` 公开可用，GitHub 同名标签 `v0.1.0` 指向同一提交。后续发版按本流程执行，以 registry 与实际提交的读回结果为准。

@@ -39,5 +39,9 @@
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.cjs"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "license": "MIT"
 }

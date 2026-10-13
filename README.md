@@ -115,6 +115,14 @@ npm test
 
 在 **插件 → 规划／执行模型** 停用组合包，即移除单按钮菜单及快捷键。原有模型选择器继续可用；当前对话模型不随停用自动恢复。浏览器里的预设与快捷键覆盖保留，重新启用后可继续使用。
 
+## 发布约定
+
+本插件后续按 **GitHub + npm 同版本发布**。完成 npm 发布后，DSH「添加插件」可直接填写包名 `dsh-model-roles`；只存在 GitHub 仓库不代表 npm 包已发布。
+
+当前首次 npm 发布尚未完成；在 registry 可以查询到公开版本之前，请继续使用上面的 GitHub 地址安装。
+
+维护者发布步骤见 [双平台发布流程](https://github.com/qinpegnsen/dsh-model-roles/blob/main/docs/releasing.md)。
+
 ## 许可证
 
 [MIT](LICENSE)

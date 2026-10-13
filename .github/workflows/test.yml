@@ -1,0 +1,25 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Check committed bundles are current
+        run: git diff --exit-code -- lib/
+      - name: Check install package contents
+        run: npm pack --dry-run

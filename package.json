@@ -1,0 +1,43 @@
+{
+  "name": "dsh-model-roles",
+  "version": "0.1.0",
+  "description": "规划／执行双模型预设，手动快捷切换当前对话模型，不改变权限或规划模式。",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qinpegnsen/dsh-model-roles.git"
+  },
+  "homepage": "https://github.com/qinpegnsen/dsh-model-roles#readme",
+  "bugs": "https://github.com/qinpegnsen/dsh-model-roles/issues",
+  "author": "qinpegnsen",
+  "engines": { "node": ">=20" },
+  "keywords": ["deepseek-harness", "dsh", "plugin", "model-switching"],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml", "README.md"],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-shortcuts",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,21 @@
+# 本机浏览器验收脚本、截图和记录不公开。
+/test/*
+!/test/core.test.cjs
+!/test/bundle.test.cjs
+
+node_modules/
+*.tgz
+.DS_Store
+.env
+.env.*
+*.log
+coverage/
+
+# DSH 用户状态与凭据不属于插件源码。
+profiles/
+sessions/
+settings.yaml
+settings.yml
+settings.json
+credentials*
+*auth.json

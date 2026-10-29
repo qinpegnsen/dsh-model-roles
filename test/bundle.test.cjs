@@ -46,6 +46,12 @@ test('bundle declares transitive session remote and regenerates shortcuts with p
     } },
     sessions: { subagentAddress: () => undefined },
     slots: { inject: (_name, fn) => { disposers.push(fn()); }, register: (descriptor, component) => {
+      // Match the installed DSH SlotCore contract: name is a declared slot, id is the entry identity.
+      const declared = new Set(['conversation.input.left', 'shell.overlay']);
+      if (!declared.has(descriptor.name)) throw new Error(`slot "${descriptor.name}" is not declared`);
+      assert.equal(typeof descriptor.id, 'string', 'list slots require an explicit entry id');
+      assert.ok(descriptor.id.length > 0);
+      assert.equal(seats.has(descriptor.id), false, 'entry ids must be unique');
       seats.set(descriptor.id, { descriptor, component }); return () => seats.delete(descriptor.id);
     } }
   };

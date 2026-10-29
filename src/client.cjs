@@ -211,7 +211,7 @@ function apply(ctx) {
       shortcuts: ctx.shortcuts, available: ctx.sessions.subagentAddress(sessionId) === undefined })
   }, Toolbar));
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'model-roles.notice', inject: () => ({ source })
+    name: 'shell.overlay', id: 'model-roles.notice', inject: () => ({ source })
   }, Notification));
 }
 module.exports = { inject, apply };

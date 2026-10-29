@@ -4,25 +4,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PresetStore } = require('../src/core.cjs');
 
-// 用最小 React/组件替身渲染配置窗口与菜单，只校验结构与交互契约，不替代实机 UI 验收。
+// 用最小 React/组件替身渲染配置窗口与按钮，只校验结构与交互契约，不替代实机 UI 验收。
 function loadClient() {
   const source = fs.readFileSync(path.join(__dirname, '../src/client.cjs'), 'utf8');
-  const state = [];
+  const buckets = new Map();
   const effects = [];
   let cursor = 0;
+  let bucket = [];
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat().filter(child => child !== null && child !== undefined) }),
     Fragment: 'Fragment',
     useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
     useState: initial => {
       const key = cursor++;
-      if (!(key in state)) state[key] = typeof initial === 'function' ? initial() : initial;
-      return [state[key], value => { state[key] = typeof value === 'function' ? value(state[key]) : value; }];
+      if (!(key in bucket)) bucket[key] = typeof initial === 'function' ? initial() : initial;
+      return [bucket[key], value => { bucket[key] = typeof value === 'function' ? value(bucket[key]) : value; }];
     },
     useEffect: effect => effects.push(effect)
   };
-  const primitives = Object.fromEntries(['Button', 'Menu', 'Modal', 'Toast', 'Tooltip', 'IconCheckOutlineRegular',
-    'IconDataOutlineRegular', 'IconSettingsOutlineRegular'].map(name => [name, name]));
+  const primitives = Object.fromEntries(['Button', 'Modal', 'Toast', 'Tooltip', 'IconDataOutlineRegular']
+    .map(name => [name, name]));
   const module = { exports: {} };
   const factory = new Function('require', 'module', 'window', `${source}\nmodule.exports.__ui = { ConfigDialog, Toolbar, css };`);
   factory(name => {
@@ -32,7 +33,16 @@ function loadClient() {
     throw new Error(`Unexpected client import: ${name}`);
   }, module, { navigator: { platform: 'Win32' } });
   const ui = module.exports.__ui;
-  return { ui, state, effects, render: (name, props) => { cursor = 0; return ui[name](props); } };
+  const stateOf = name => {
+    if (!buckets.has(name)) buckets.set(name, []);
+    return buckets.get(name);
+  };
+  return {
+    ui,
+    stateOf,
+    effects,
+    render: (name, props) => { cursor = 0; bucket = stateOf(name); return ui[name](props); }
+  };
 }
 
 function walk(tree, predicate) {
@@ -68,7 +78,10 @@ function fixture() {
   // 首次渲染后标记目录已加载，跳过异步载入等待。
   const render = name => {
     client.render(name, props);
-    if (name === 'ConfigDialog' && client.state[3] !== undefined) { client.state[3] = false; client.state[4] = true; }
+    if (name === 'ConfigDialog') {
+      const state = client.stateOf(name);
+      if (state[3] !== undefined) { state[3] = false; state[4] = true; }
+    }
     return client.render(name, props);
   };
   return { client, props, presets, stateRef, render, writes: () => writes, closes: () => closes, raw: () => raw };
@@ -126,7 +139,7 @@ test('add and delete only change the draft; cancel writes nothing', () => {
   assert.equal(f.raw(), before);
 });
 
-test('saving a new slot persists version 2 and the menu lists it immediately', () => {
+test('saving a new slot persists version 2; the toolbar button opens the dialog directly', () => {
   const f = fixture();
   let tree = f.render('ConfigDialog');
   walk(tree, node => Object.hasOwn(node.props, 'data-model-roles-add'))[0].props.onClick();
@@ -144,21 +157,26 @@ test('saving a new slot persists version 2 and the menu lists it immediately', (
   assert.deepEqual(saved.presets.execution3, { provider: 'p', model: 'reasoning' });
   assert.equal(saved.presets.execution2, null);
 
-  const menu = f.render('Toolbar');
-  const menuNode = walk(menu, node => node.type === 'Menu')[0];
-  const items = menuNode.props.items;
-  assert.deepEqual(items.filter(item => /^execution/.test(item.id)).map(item => item.label),
-    ['执行模型1', '执行模型2', '执行模型3']);
-  // 当前选中只保留条目自带的勾，菜单不再叠加选中标记。
-  assert.equal(menuNode.props.selectedId, undefined);
-  assert.equal(items.find(item => item.id === 'execution').icon, undefined);
-  f.stateRef.current = { provider: 'p', model: 'plain' };
-  const active = walk(f.render('Toolbar'), node => node.type === 'Menu')[0].props.items;
-  assert.equal(active.find(item => item.id === 'execution').icon.type, 'IconCheckOutlineRegular');
-  assert.equal(active.find(item => item.id === 'planning').icon, undefined);
-  assert.equal(items.at(-1).label, '配置模型预设…');
-  const anchor = walk(menu, node => node.type === 'Menu')[0].props.anchor;
-  const trigger = anchor.children[0];
-  assert.equal(trigger.props['data-dsh-model-roles'], '');
+  const toolbar = f.render('Toolbar');
+  assert.equal(walk(toolbar, node => node.type === 'Menu').length, 0, '不再渲染中间菜单');
+  const trigger = walk(toolbar, node => node.props && node.props['data-dsh-model-roles'] !== undefined)[0];
+  assert.equal(trigger.type, 'Button');
   assert.equal(trigger.children.join(''), '模型预设');
+  assert.equal(trigger.props['aria-haspopup'], 'dialog');
+  trigger.props.onClick();
+  const opened = f.render('Toolbar');
+  assert.equal(walk(opened, node => node.type === f.client.ui.ConfigDialog).length, 1, '点击后直接挂载配置窗口');
+  const dialog = f.render('ConfigDialog');
+  assert.equal(walk(dialog.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save')).length, 1);
+});
+
+test('active preset is reflected in the button label and tooltip', () => {
+  const f = fixture();
+  f.stateRef.current = { provider: 'p', model: 'plain' };
+  const toolbar = f.render('Toolbar');
+  const trigger = walk(toolbar, node => node.props && node.props['data-dsh-model-roles'] !== undefined)[0];
+  assert.equal(trigger.children.join(''), '执行模型1');
+  assert.equal(trigger.props['data-dsh-model-role-active'], 'execution');
+  const tooltip = walk(toolbar, node => node.type === 'Tooltip')[0];
+  assert.match(String(tooltip.props.label), /执行模型1：Plain/);
 });

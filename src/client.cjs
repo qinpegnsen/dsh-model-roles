@@ -1,7 +1,6 @@
 'use strict';
 const React = require('react');
-const { Button, Menu, Modal, Toast, Tooltip, IconCheckOutlineRegular, IconDataOutlineRegular,
-  IconSettingsOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
+const { Button, Modal, Toast, Tooltip, IconDataOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
 const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, syncShortcuts, PresetStore,
   RoleSwitcher, sameSelection, findModel, validateSelection, currentMainSession, shortcutFor } = require('./core.cjs');
 const h = React.createElement;
@@ -135,11 +134,9 @@ function ConfigDialog({ directory, presets, shortcuts, onClose }) {
       stored.error || (stale ? '配置已在其他窗口修改，请关闭后重新打开。' : error)) : null));
 }
 
-function Toolbar({ sessionId, directory, controller, presets, shortcuts, available }) {
+function Toolbar({ directory, controller, presets, shortcuts, available }) {
   const saved = useStore(presets);
   const state = useStore(directory.store);
-  const bindings = useStore(shortcuts.catalog);
-  const [open, setOpen] = React.useState(false);
   const [config, setConfig] = React.useState(false);
   React.useEffect(() => {
     if (!available) return;
@@ -147,49 +144,21 @@ function Toolbar({ sessionId, directory, controller, presets, shortcuts, availab
   }, [directory, available, controller]);
   if (!available) return null;
   const busy = state.status === 'selecting' || state.status === 'loading';
-  // 单一触发器：只占一个按钮的宽度，避免挤压模型位。
   const activeRole = rolesFor(saved.presets).find(role => sameSelection(state.current, saved.presets[role]));
   const triggerLabel = activeRole ? roleLabel(activeRole) : '模型预设';
   const activeModel = activeRole ? modelTitle(saved.presets[activeRole], state.groups) : '未配置';
-  const items = [
-    { type: 'label', id: 'roles', text: '切换模型' },
-    ...rolesFor(saved.presets).map(role => ({
-      id: role,
-      label: roleLabel(role),
-      disabled: busy,
-      shortcut: shortcutOf(bindings, role),
-      icon: sameSelection(state.current, saved.presets[role]) ? h(IconCheckOutlineRegular, { size: 16 }) : undefined
-    })),
-    { type: 'separator', id: 'sep' },
-    { id: 'config', label: '配置模型预设…', icon: h(IconSettingsOutlineRegular, { size: 16 }) }
-  ];
+  // 单一触发器：点击直接打开配置窗口，不再弹出中间菜单。
   return h(React.Fragment, null,
-    h(Menu, {
-      open, autoFocus: false, align: 'start', side: 'top', portal: true, compact: true,
-      anchor: h(Tooltip, { label: `${activeRole ? roleLabel(activeRole) : '模型预设'}：${activeModel}` },
-        h(Button, {
-          variant: 'toolbar', size: 'sm', disabled: busy,
-          'aria-label': `模型预设快捷切换，当前${triggerLabel}`,
-          'aria-haspopup': 'menu', 'aria-expanded': open,
-          'data-dsh-model-roles': '', 'data-dsh-model-role-active': activeRole || 'none',
-          icon: h(IconDataOutlineRegular, { size: 16 }),
-          onClick: () => setOpen(current => !current)
-        }, triggerLabel)),
-      items,
-      onSelect: id => {
-        setOpen(false);
-        if (id === 'config') { presets.reload(); setConfig(true); return; }
-        void controller.switchTo(id, sessionId);
-      },
-      onClose: () => setOpen(false)
-    }),
+    h(Tooltip, { label: `${triggerLabel}：${activeModel}（点击配置模型预设）` },
+      h(Button, {
+        variant: 'toolbar', size: 'sm', disabled: busy,
+        'aria-label': `配置模型预设，当前${triggerLabel}`,
+        'aria-haspopup': 'dialog',
+        'data-dsh-model-roles': '', 'data-dsh-model-role-active': activeRole || 'none',
+        icon: h(IconDataOutlineRegular, { size: 16 }),
+        onClick: () => { presets.reload(); setConfig(true); }
+      }, triggerLabel)),
     config ? h(ConfigDialog, { directory, presets, shortcuts, onClose: () => setConfig(false) }) : null);
-}
-
-/** Read the effective key labels for one role so the menu row shows the current binding. */
-function shortcutOf(bindings, role) {
-  const entry = bindings.find(item => item.id === `model-roles.${role}`);
-  return entry?.keys.length ? { keys: entry.keys, aria: entry.aria } : undefined;
 }
 
 function Notification({ source }) {

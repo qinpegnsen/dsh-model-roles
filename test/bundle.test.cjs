@@ -4,12 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-test('bundle declares transitive session remote and cleans all registrations on unload', () => {
+const presetsDocument = count => JSON.stringify({ version: 2, presets: Object.fromEntries([
+  ['planning', null],
+  ...Array.from({ length: count }, (_, index) => [index === 0 ? 'execution' : `execution${index + 1}`, null])
+]) });
+
+test('bundle declares transitive session remote and regenerates shortcuts with presets', () => {
   let exports;
   const listeners = new Map();
   const styles = [];
+  let stored = null;
   const context = {
-    window: { localStorage: { getItem: () => null, setItem: () => {} },
+    window: { localStorage: { getItem: () => stored, setItem: (_key, value) => { stored = value; } },
       addEventListener: (event, fn) => listeners.set(event, fn),
       removeEventListener: (event, fn) => { if (listeners.get(event) === fn) listeners.delete(event); },
       __ModuleLoader__: { load: entry => {
@@ -44,10 +50,27 @@ test('bundle declares transitive session remote and cleans all registrations on 
     } }
   };
   exports.apply(ctx);
-  assert.equal(commands.size, 2);
+  assert.equal(commands.size, 3);
   assert.equal(seats.size, 2);
   assert.equal(styles.length, 1);
   assert.equal(seats.get('model-roles').descriptor.inject('ordinary-session').directory.sessionId, 'ordinary-session');
+
+  // 与其他标签页同步：新增执行模型后快捷键随之注册，删除后随之释放。
+  stored = presetsDocument(6);
+  listeners.get('storage')({ key: 'dsh.model-roles.v1' });
+  assert.equal(commands.size, 7);
+  assert.deepEqual([...commands.keys()].filter(id => id === 'model-roles.execution6'), ['model-roles.execution6']);
+
+  stored = presetsDocument(2);
+  listeners.get('storage')({ key: 'dsh.model-roles.v1' });
+  assert.equal(commands.size, 3);
+  assert.equal(commands.has('model-roles.execution3'), false);
+
+  // 读取失败时不按旧快照增删快捷键。
+  stored = 'invalid';
+  listeners.get('storage')({ key: 'dsh.model-roles.v1' });
+  assert.equal(commands.size, 3);
+
   for (const dispose of disposers.reverse()) if (typeof dispose === 'function') dispose();
   assert.equal(commands.size, 0);
   assert.equal(seats.size, 0);

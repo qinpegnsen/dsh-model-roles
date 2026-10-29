@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-roles",
-  "version": "0.1.0",
-  "description": "规划／执行双模型预设，手动快捷切换当前对话模型，不改变权限或规划模式。",
+  "version": "0.2.0",
+  "description": "规划／执行模型预设：规划模型固定一个，执行模型可增删，手动快捷切换当前对话模型，不改变权限或规划模式。",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/qinpegnsen/dsh-model-roles.git"

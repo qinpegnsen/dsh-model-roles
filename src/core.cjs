@@ -1,9 +1,45 @@
 'use strict';
 
 const STORAGE_KEY = 'dsh.model-roles.v1';
-const ROLES = ['planning', 'execution'];
-const LABELS = { planning: '规划', execution: '执行' };
-const emptyPresets = () => ({ planning: null, execution: null });
+const emptyPresets = () => ({ planning: null, execution: null, execution2: null });
+
+/** Execution slots are named execution, execution2, execution3… in display order. */
+const executionKey = number => (number === 1 ? 'execution' : `execution${number}`);
+
+function executionNumber(role) {
+  if (role === 'execution') return 1;
+  if (!/^execution[1-9][0-9]*$/.test(role)) return null;
+  const number = Number(role.slice(9));
+  return Number.isSafeInteger(number) && number >= 2 ? number : null;
+}
+
+function rolesFor(presets) {
+  return ['planning', ...Object.keys(presets).filter(role => role !== 'planning')
+    .sort((a, b) => executionNumber(a) - executionNumber(b))];
+}
+
+function roleLabel(role) {
+  if (role === 'planning') return '规划模型';
+  const number = executionNumber(role);
+  if (number === null) throw new Error('未知模型角色。');
+  return `执行模型${number}`;
+}
+
+/** Add one unconfigured execution slot at the end; returns a new preset object. */
+function addExecution(presets) {
+  return { ...presets, [executionKey(rolesFor(presets).length)]: null };
+}
+
+/** Remove one execution slot and renumber the rest, preserving every selection. */
+function removeExecution(presets, role) {
+  if (role === 'planning' || !Object.hasOwn(presets, role)) throw new Error('只能删除已有的执行模型。');
+  const next = { planning: presets.planning };
+  let number = 1;
+  for (const current of rolesFor(presets)) {
+    if (current !== 'planning' && current !== role) next[executionKey(number++)] = presets[current];
+  }
+  return next;
+}
 
 function isSelection(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -16,14 +52,23 @@ function isSelection(value) {
 function parsePresets(raw) {
   if (raw === null) return emptyPresets();
   const doc = JSON.parse(raw);
-  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || doc.version !== 1
+  const invalid = () => { throw new Error('模型预设格式不正确或版本不受支持，请先检查本浏览器的插件配置。'); };
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || ![1, 2].includes(doc.version)
     || Object.keys(doc).some(key => !['version', 'presets'].includes(key))
     || doc.presets === null || typeof doc.presets !== 'object' || Array.isArray(doc.presets)
-    || Object.keys(doc.presets).length !== 2
-    || !ROLES.every(role => Object.hasOwn(doc.presets, role) && (doc.presets[role] === null || isSelection(doc.presets[role])))) {
-    throw new Error('模型预设格式不正确或版本不受支持，请先检查本浏览器的插件配置。');
+    || !Object.hasOwn(doc.presets, 'planning')) invalid();
+  const keys = Object.keys(doc.presets);
+  if (keys.some(role => role !== 'planning' && executionNumber(role) === null)
+    || keys.some(role => doc.presets[role] !== null && !isSelection(doc.presets[role]))) invalid();
+  if (doc.version === 1) {
+    // 0.1.x and the first 0.2.0 draft stored either two or three slots.
+    if (!Object.hasOwn(doc.presets, 'execution')
+      || keys.some(role => !['planning', 'execution', 'execution2'].includes(role))) invalid();
+    return { planning: doc.presets.planning, execution: doc.presets.execution, execution2: doc.presets.execution2 ?? null };
   }
-  return doc.presets;
+  const roles = rolesFor(doc.presets);
+  if (roles.slice(1).some((role, index) => role !== executionKey(index + 1))) invalid();
+  return Object.fromEntries(roles.map(role => [role, doc.presets[role]]));
 }
 
 function sameSelection(a, b) {
@@ -69,7 +114,7 @@ class PresetStore {
     }
   }
   save(presets, expectedRevision) {
-    const raw = JSON.stringify({ version: 1, presets });
+    const raw = JSON.stringify({ version: 2, presets });
     const checked = parsePresets(raw);
     const before = this.storage.getItem(STORAGE_KEY);
     parsePresets(before);
@@ -97,7 +142,6 @@ class RoleSwitcher {
     this.busy = new Set();
   }
   async switchTo(role, sessionId) {
-    if (!ROLES.includes(role)) throw new Error('未知模型角色。');
     if (this.busy.has(sessionId)) return;
     this.busy.add(sessionId);
     try {
@@ -105,8 +149,10 @@ class RoleSwitcher {
       this.presets.reload();
       const saved = this.presets.getSnapshot();
       if (saved.error) throw new Error(saved.error);
+      if (!Object.hasOwn(saved.presets, role)) throw new Error('该模型预设已删除，请重新打开菜单。');
+      const label = roleLabel(role);
       const selection = saved.presets[role];
-      if (!selection) throw new Error(`请先点击“配置双模型”，设置${LABELS[role]}模型。`);
+      if (!selection) throw new Error(`请先点击“配置模型预设”，设置${label}。`);
       const directory = this.directoryFor(sessionId);
       const state = await directory.load();
       if (!this.isAlive()) return;
@@ -114,7 +160,7 @@ class RoleSwitcher {
       const model = validateSelection(state.groups, selection);
       if (directory.store.getSnapshot().pending) throw new Error('当前对话正在切换模型，请稍后再试。');
       if (sameSelection(directory.store.getSnapshot().current, selection)) {
-        this.notify(`当前已是${LABELS[role]}模型：${model.name}`, true);
+        this.notify(`当前已是${label}：${model.name}`, true);
         return;
       }
       const result = await directory.select({ ...selection });
@@ -124,7 +170,7 @@ class RoleSwitcher {
       if (!sameSelection(directory.store.getSnapshot().current, selection)) {
         throw new Error('模型切换结果尚未同步，请核对输入框旁的当前模型，不要重复切换。');
       }
-      this.notify(`已切换到${LABELS[role]}模型：${model.name}；下次请求生效`, true);
+      this.notify(`已切换到${label}：${model.name}；下次请求生效`, true);
     } catch (error) {
       if (this.isAlive()) this.notify(error.message || '模型切换失败。', false);
     } finally {
@@ -143,12 +189,14 @@ function currentMainSession(sessions, layout) {
 }
 
 function shortcutFor(role, resolveTarget, switchTo) {
-  const binding = { code: role === 'planning' ? 'Digit1' : 'Digit2', modifiers: ['primary', 'alt'] };
+  // 规划模型 Digit1；执行模型 N 使用 Digit(N+1)，第 10 个起复用 Digit0，更多角色由用户自行绑定。
+  const digit = role === 'planning' ? 1 : executionNumber(role) + 1;
+  const binding = digit <= 10 ? { code: `Digit${digit % 10}`, modifiers: ['primary', 'alt'] } : undefined;
   return {
     id: `model-roles.${role}`,
-    label: () => `切换到${LABELS[role]}模型`,
-    aliases: [role, `${role} model`, LABELS[role]],
-    defaults: { 'web:macos': binding, 'web:windows': binding, 'desktop:macos': binding, 'desktop:windows': binding },
+    label: () => `切换到${roleLabel(role)}`,
+    aliases: [role, `${role} model`, roleLabel(role)],
+    defaults: binding ? { 'web:macos': binding, 'web:windows': binding, 'desktop:macos': binding, 'desktop:windows': binding } : {},
     regions: ['page', 'editable'],
     modals: [],
     resolve: () => {
@@ -160,5 +208,25 @@ function shortcutFor(role, resolveTarget, switchTo) {
   };
 }
 
-module.exports = { STORAGE_KEY, ROLES, LABELS, parsePresets, sameSelection, findModel,
-  validateSelection, PresetStore, RoleSwitcher, currentMainSession, shortcutFor };
+/** Keep registered shortcuts in step with the saved preset list. */
+function syncShortcuts(presets, register, resolveTarget, switchTo) {
+  const registered = new Map();
+  const sync = () => {
+    const snapshot = presets.getSnapshot();
+    if (snapshot.error) return;
+    const roles = rolesFor(snapshot.presets);
+    for (const [role, dispose] of registered) {
+      if (!roles.includes(role)) { dispose(); registered.delete(role); }
+    }
+    for (const role of roles) {
+      if (!registered.has(role)) registered.set(role, register(shortcutFor(role, resolveTarget, switchTo)));
+    }
+  };
+  const unsubscribe = presets.subscribe(sync);
+  sync();
+  return () => { unsubscribe(); for (const dispose of registered.values()) dispose(); registered.clear(); };
+}
+
+module.exports = { STORAGE_KEY, rolesFor, roleLabel, executionNumber, addExecution, removeExecution,
+  syncShortcuts, parsePresets, sameSelection, findModel, validateSelection, PresetStore, RoleSwitcher,
+  currentMainSession, shortcutFor };

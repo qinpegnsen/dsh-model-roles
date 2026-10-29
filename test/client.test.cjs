@@ -49,12 +49,13 @@ function fixture() {
   } });
   let writes = 0;
   let closes = 0;
+  const stateRef = { current: null };
   const presets = new PresetStore({ getItem: () => raw, setItem: (_key, value) => { raw = value; writes++; } });
   const catalog = { groups: [{ id: 'p', name: 'Provider', models: [
     { id: 'reasoning', name: 'Reasoning', model: 'reasoning', reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } },
     { id: 'plain', name: 'Plain' }
   ] }], failures: [] };
-  const store = { subscribe: () => () => {}, getSnapshot: () => catalog };
+  const store = { subscribe: () => () => {}, getSnapshot: () => ({ ...catalog, current: stateRef.current }) };
   const props = {
     presets,
     directory: { store, load: async () => catalog },
@@ -70,7 +71,7 @@ function fixture() {
     if (name === 'ConfigDialog' && client.state[3] !== undefined) { client.state[3] = false; client.state[4] = true; }
     return client.render(name, props);
   };
-  return { client, props, presets, render, writes: () => writes, closes: () => closes, raw: () => raw };
+  return { client, props, presets, stateRef, render, writes: () => writes, closes: () => closes, raw: () => raw };
 }
 
 test('every slot has one model selector and an unlabelled reasoning selector in the same row', () => {
@@ -144,11 +145,17 @@ test('saving a new slot persists version 2 and the menu lists it immediately', (
   assert.equal(saved.presets.execution2, null);
 
   const menu = f.render('Toolbar');
-  const items = walk(menu, node => node.type === 'Menu')[0].props.items;
+  const menuNode = walk(menu, node => node.type === 'Menu')[0];
+  const items = menuNode.props.items;
   assert.deepEqual(items.filter(item => /^execution/.test(item.id)).map(item => item.label),
     ['执行模型1', '执行模型2', '执行模型3']);
-  // 选中态由菜单 selectedId 提供，条目不再重复画一个勾。
+  // 当前选中只保留条目自带的勾，菜单不再叠加选中标记。
+  assert.equal(menuNode.props.selectedId, undefined);
   assert.equal(items.find(item => item.id === 'execution').icon, undefined);
+  f.stateRef.current = { provider: 'p', model: 'plain' };
+  const active = walk(f.render('Toolbar'), node => node.type === 'Menu')[0].props.items;
+  assert.equal(active.find(item => item.id === 'execution').icon.type, 'IconCheckOutlineRegular');
+  assert.equal(active.find(item => item.id === 'planning').icon, undefined);
   assert.equal(items.at(-1).label, '配置模型预设…');
   const anchor = walk(menu, node => node.type === 'Menu')[0].props.anchor;
   const trigger = anchor.children[0];

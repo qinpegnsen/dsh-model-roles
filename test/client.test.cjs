@@ -147,6 +147,8 @@ test('saving a new slot persists version 2 and the menu lists it immediately', (
   const items = walk(menu, node => node.type === 'Menu')[0].props.items;
   assert.deepEqual(items.filter(item => /^execution/.test(item.id)).map(item => item.label),
     ['执行模型1', '执行模型2', '执行模型3']);
+  // 选中态由菜单 selectedId 提供，条目不再重复画一个勾。
+  assert.equal(items.find(item => item.id === 'execution').icon, undefined);
   assert.equal(items.at(-1).label, '配置模型预设…');
   const anchor = walk(menu, node => node.type === 'Menu')[0].props.anchor;
   const trigger = anchor.children[0];

@@ -1,6 +1,6 @@
 'use strict';
 const React = require('react');
-const { Button, Menu, Modal, Toast, Tooltip, IconCheckOutlineRegular, IconDataOutlineRegular,
+const { Button, Menu, Modal, Toast, Tooltip, IconDataOutlineRegular,
   IconSettingsOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
 const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, syncShortcuts, PresetStore,
   RoleSwitcher, sameSelection, findModel, validateSelection, currentMainSession, shortcutFor } = require('./core.cjs');
@@ -157,8 +157,7 @@ function Toolbar({ sessionId, directory, controller, presets, shortcuts, availab
       id: role,
       label: roleLabel(role),
       disabled: busy,
-      shortcut: shortcutOf(bindings, role),
-      icon: sameSelection(state.current, saved.presets[role]) ? h(IconCheckOutlineRegular, { size: 16 }) : undefined
+      shortcut: shortcutOf(bindings, role)
     })),
     { type: 'separator', id: 'sep' },
     { id: 'config', label: '配置模型预设…', icon: h(IconSettingsOutlineRegular, { size: 16 }) }

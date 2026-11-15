@@ -6,6 +6,15 @@ const emptyPresets = () => ({ planning: null, execution: null, execution2: null 
 /** Execution slots are named execution, execution2, execution3… in display order. */
 const executionKey = number => (number === 1 ? 'execution' : `execution${number}`);
 
+/** Keep only explicit booleans for known roles; unknown or non-boolean entries are dropped. */
+function normalizeTeam(team) {
+  const next = {};
+  for (const [role, enabled] of Object.entries(team || {})) {
+    if (typeof enabled === 'boolean' && (role === 'planning' || executionNumber(role) !== null)) next[role] = enabled;
+  }
+  return next;
+}
+
 function executionNumber(role) {
   if (role === 'execution') return 1;
   if (!/^execution[1-9][0-9]*$/.test(role)) return null;
@@ -25,6 +34,18 @@ function roleLabel(role) {
   return `执行模型${number}`;
 }
 
+/** Rebuild a per-role map over the slots left after `drop`, renumbering by position. */
+function remapRoles(presets, values, drop) {
+  const next = {};
+  let number = 1;
+  for (const role of rolesFor(presets)) {
+    if (role === drop) continue;
+    const key = role === 'planning' ? 'planning' : executionKey(number++);
+    if (Object.hasOwn(values, role)) next[key] = values[role];
+  }
+  return next;
+}
+
 /** Add one unconfigured execution slot at the end; returns a new preset object. */
 function addExecution(presets) {
   return { ...presets, [executionKey(rolesFor(presets).length)]: null };
@@ -33,12 +54,12 @@ function addExecution(presets) {
 /** Remove one execution slot and renumber the rest, preserving every selection. */
 function removeExecution(presets, role) {
   if (role === 'planning' || !Object.hasOwn(presets, role)) throw new Error('只能删除已有的执行模型。');
-  const next = { planning: presets.planning };
-  let number = 1;
-  for (const current of rolesFor(presets)) {
-    if (current !== 'planning' && current !== role) next[executionKey(number++)] = presets[current];
-  }
-  return next;
+  return remapRoles(presets, presets, role);
+}
+
+/** Move Team flags onto the same positions after an execution slot is removed. */
+function removeTeamSlot(presets, team, role) {
+  return remapRoles(presets, normalizeTeam(team), role);
 }
 
 function isSelection(value) {
@@ -49,14 +70,30 @@ function isSelection(value) {
     && Object.keys(value).every(key => ['provider', 'model', 'reasoningEffort'].includes(key));
 }
 
-function parsePresets(raw) {
-  if (raw === null) return emptyPresets();
+const INVALID_DOCUMENT = '模型预设格式不正确或版本不受支持，请先检查本浏览器的插件配置。';
+
+/** Team flags only accept explicit booleans on roles that still exist. */
+function parseTeam(team, roles) {
+  if (team === undefined) return {};
+  if (team === null || typeof team !== 'object' || Array.isArray(team)) throw new Error(INVALID_DOCUMENT);
+  const next = {};
+  for (const [role, enabled] of Object.entries(team)) {
+    if (typeof enabled !== 'boolean' || !roles.includes(role)) throw new Error(INVALID_DOCUMENT);
+    next[role] = enabled;
+  }
+  return next;
+}
+
+/** Parse the stored document into presets plus the per-role Team flags. */
+function parseDocument(raw) {
+  if (raw === null) return { presets: emptyPresets(), team: {} };
   const doc = JSON.parse(raw);
-  const invalid = () => { throw new Error('模型预设格式不正确或版本不受支持，请先检查本浏览器的插件配置。'); };
-  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || ![1, 2].includes(doc.version)
-    || Object.keys(doc).some(key => !['version', 'presets'].includes(key))
+  const invalid = () => { throw new Error(INVALID_DOCUMENT); };
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || ![1, 2, 3].includes(doc.version)
     || doc.presets === null || typeof doc.presets !== 'object' || Array.isArray(doc.presets)
     || !Object.hasOwn(doc.presets, 'planning')) invalid();
+  const allowed = doc.version === 3 ? ['version', 'presets', 'team'] : ['version', 'presets'];
+  if (Object.keys(doc).some(key => !allowed.includes(key))) invalid();
   const keys = Object.keys(doc.presets);
   if (keys.some(role => role !== 'planning' && executionNumber(role) === null)
     || keys.some(role => doc.presets[role] !== null && !isSelection(doc.presets[role]))) invalid();
@@ -64,11 +101,19 @@ function parsePresets(raw) {
     // 0.1.x and the first 0.2.0 draft stored either two or three slots.
     if (!Object.hasOwn(doc.presets, 'execution')
       || keys.some(role => !['planning', 'execution', 'execution2'].includes(role))) invalid();
-    return { planning: doc.presets.planning, execution: doc.presets.execution, execution2: doc.presets.execution2 ?? null };
+    return {
+      presets: { planning: doc.presets.planning, execution: doc.presets.execution, execution2: doc.presets.execution2 ?? null },
+      team: {}
+    };
   }
   const roles = rolesFor(doc.presets);
   if (roles.slice(1).some((role, index) => role !== executionKey(index + 1))) invalid();
-  return Object.fromEntries(roles.map(role => [role, doc.presets[role]]));
+  const presets = Object.fromEntries(roles.map(role => [role, doc.presets[role]]));
+  return { presets, team: doc.version === 3 ? parseTeam(doc.team, roles) : {} };
+}
+
+function parsePresets(raw) {
+  return parseDocument(raw).presets;
 }
 
 function sameSelection(a, b) {
@@ -96,7 +141,7 @@ class PresetStore {
   constructor(storage) {
     this.storage = storage;
     this.listeners = new Set();
-    this.state = { presets: emptyPresets(), revision: null, error: null };
+    this.state = { presets: emptyPresets(), team: {}, revision: null, error: null };
     this.getSnapshot = () => this.state;
     this.subscribe = listener => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
     this.reload();
@@ -108,16 +153,17 @@ class PresetStore {
   reload() {
     try {
       const revision = this.storage.getItem(STORAGE_KEY);
-      this.publish({ presets: parsePresets(revision), revision, error: null });
+      const { presets, team } = parseDocument(revision);
+      this.publish({ presets, team, revision, error: null });
     } catch (error) {
       this.publish({ ...this.state, error: error.message || '无法读取模型预设。' });
     }
   }
-  save(presets, expectedRevision) {
-    const raw = JSON.stringify({ version: 2, presets });
-    const checked = parsePresets(raw);
+  save(presets, expectedRevision, team = {}) {
+    const raw = JSON.stringify({ version: 3, presets, team: normalizeTeam(team) });
+    const checked = parseDocument(raw);
     const before = this.storage.getItem(STORAGE_KEY);
-    parsePresets(before);
+    parseDocument(before);
     if (before !== expectedRevision) {
       this.reload();
       throw new Error('模型预设已在其他窗口修改，请关闭配置后重新打开。');
@@ -128,17 +174,18 @@ class PresetStore {
       this.reload();
       throw new Error('模型预设保存后读回不一致，请重新打开配置核对。');
     }
-    this.publish({ presets: checked, revision: raw, error: null });
+    this.publish({ presets: checked.presets, team: checked.team, revision: raw, error: null });
   }
 }
 
 class RoleSwitcher {
-  constructor({ presets, directoryFor, notify, isAvailable, isAlive = () => true }) {
+  constructor({ presets, directoryFor, notify, isAvailable, isAlive = () => true, setTeam = async () => null }) {
     this.presets = presets;
     this.directoryFor = directoryFor;
     this.notify = notify;
     this.isAvailable = isAvailable;
     this.isAlive = isAlive;
+    this.setTeam = setTeam;
     this.busy = new Set();
   }
   async switchTo(role, sessionId) {
@@ -169,6 +216,13 @@ class RoleSwitcher {
       // 与内置选择器同源读回；不得把 RPC 受理当成切换完成。
       if (!sameSelection(directory.store.getSnapshot().current, selection)) {
         throw new Error('模型切换结果尚未同步，请核对输入框旁的当前模型，不要重复切换。');
+      }
+      // 团队协作标记随预设走：只应用明确记录过的角色，未记录的角色保持当前状态。
+      const team = saved.team[role];
+      if (typeof team === 'boolean') {
+        const failure = await this.setTeam(sessionId, team);
+        if (!this.isAlive()) return;
+        if (failure) throw new Error(`已切换到${label}：${model.name}；但团队协作开关设置失败：${failure}`);
       }
       this.notify(`已切换到${label}：${model.name}；下次请求生效`, true);
     } catch (error) {
@@ -228,5 +282,5 @@ function syncShortcuts(presets, register, resolveTarget, switchTo) {
 }
 
 module.exports = { STORAGE_KEY, rolesFor, roleLabel, executionNumber, addExecution, removeExecution,
-  syncShortcuts, parsePresets, sameSelection, findModel, validateSelection, PresetStore, RoleSwitcher,
-  currentMainSession, shortcutFor };
+  removeTeamSlot, normalizeTeam, parseDocument, syncShortcuts, parsePresets, sameSelection, findModel,
+  validateSelection, PresetStore, RoleSwitcher, currentMainSession, shortcutFor };

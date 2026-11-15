@@ -1,7 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, syncShortcuts, parsePresets,
-  PresetStore, RoleSwitcher, sameSelection, validateSelection, currentMainSession, shortcutFor } = require('../src/core.cjs');
+const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, removeTeamSlot, syncShortcuts,
+  parseDocument, parsePresets, PresetStore, RoleSwitcher, sameSelection, validateSelection, currentMainSession,
+  shortcutFor } = require('../src/core.cjs');
 const A = { provider: 'provider-a', model: 'model-1', reasoningEffort: 'high' };
 const B = { provider: 'provider-b', model: 'model-1' };
 const C = { provider: 'provider-a', model: 'model-1' };
@@ -56,7 +57,13 @@ test('first run and version 1 documents migrate without losing selections', () =
 
 test('invalid or unsupported documents are rejected instead of silently fixed', () => {
   for (const value of ['null', '[]', '{}', '{',
-    JSON.stringify({ version: 3, presets: { planning: null } }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: { unknown: true } }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: 'yes' } }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: null } }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: [] }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: null }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: { execution: true } }),
+    JSON.stringify({ version: 3, presets: { planning: null }, team: {}, extra: true }),
     JSON.stringify({ version: 2, presets: { planning: null }, extra: true }),
     JSON.stringify({ version: 2, presets: [] }),
     JSON.stringify({ version: 2, presets: null }),
@@ -102,12 +109,12 @@ test('exact provider, model and reasoning, not name or model-only match', () => 
   assert.throws(() => validateSelection(groups, { ...B, provider: 'missing' }), /不可用/);
 });
 
-test('save writes version 2 and detects stale cross-tab edits', () => {
+test('save writes version 3 and detects stale cross-tab edits', () => {
   const adapter = storage();
   const first = new PresetStore(adapter);
   const second = new PresetStore(adapter);
   first.save({ planning: A, execution: null, execution2: null, execution3: B }, null);
-  assert.equal(JSON.parse(adapter.read()).version, 2);
+  assert.equal(JSON.parse(adapter.read()).version, 3);
   assert.deepEqual(plain(new PresetStore(adapter).getSnapshot().presets),
     { planning: A, execution: null, execution2: null, execution3: B });
   assert.throws(() => second.save({ planning: null, execution: B, execution2: null }, null), /其他窗口/);
@@ -290,4 +297,53 @@ test('corrupt stored data surfaces an error and keeps the last good snapshot', (
   presets.reload();
   assert.ok(presets.getSnapshot().error);
   assert.deepEqual(plain(presets.getSnapshot().presets), plain(good.presets));
+});
+
+test('version 3 documents carry per-role team flags and reject unknown roles', () => {
+  const doc = { version: 3, presets: { planning: A, execution: B, execution2: null },
+    team: { planning: true, execution: false } };
+  const parsed = parseDocument(JSON.stringify(doc));
+  assert.deepEqual(plain(parsed.presets), doc.presets);
+  assert.deepEqual(plain(parsed.team), { planning: true, execution: false });
+  assert.deepEqual(plain(parseDocument(null).team), {});
+  assert.deepEqual(plain(parseDocument(JSON.stringify({ version: 2, presets: { planning: A, execution: B, execution2: null } })).team), {});
+  assert.throws(() => parseDocument(JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: true, execution: true } })), /格式不正确/);
+  assert.throws(() => parseDocument(JSON.stringify({ version: 3, presets: { planning: null }, team: 'yes' })), /格式不正确/);
+});
+
+test('team flags follow their execution slot when another slot is removed', () => {
+  const presets = many(3);
+  const team = { planning: true, execution: false, execution2: true, execution3: false };
+  const after = removeTeamSlot(presets, team, 'execution');
+  assert.deepEqual(after, { planning: true, execution: true, execution2: false });
+  assert.deepEqual(removeTeamSlot(presets, team, 'execution2'), { planning: true, execution: false, execution2: false });
+  assert.deepEqual(removeTeamSlot({ planning: A, execution: B }, { planning: true }, 'execution'), { planning: true });
+});
+
+test('saving presets stores team flags and switching applies them', async () => {
+  const adapter = storage();
+  const store = new PresetStore(adapter);
+  store.save({ planning: A, execution: B, execution2: null }, null, { planning: true, unknown: true, execution: 'yes' });
+  assert.deepEqual(plain(JSON.parse(adapter.read()).team), { planning: true });
+  assert.deepEqual(plain(store.getSnapshot().team), { planning: true });
+  const applied = [];
+  const f = fixture({ setTeam: async (sessionId, enabled) => { applied.push([sessionId, enabled]); return null; } });
+  f.presets.save({ planning: A, execution: B, execution2: null }, null, { planning: true, execution: false });
+  await f.controller.switchTo('planning', 's1');
+  await f.controller.switchTo('execution', 's1');
+  assert.deepEqual(applied, [['s1', true], ['s1', false]]);
+  assert.ok(f.notices.every(([, success]) => success));
+});
+
+test('team switch failures surface without claiming a clean switch', async () => {
+  const failing = fixture({ setTeam: async () => 'root required' });
+  failing.presets.save({ planning: A, execution: B, execution2: null }, null, { planning: true });
+  await failing.controller.switchTo('planning', 's1');
+  assert.match(failing.notices[0][0], /团队协作开关设置失败：root required/);
+  assert.equal(failing.notices[0][1], false);
+  assert.equal(failing.calls.length, 1);
+  const skipped = fixture();
+  skipped.presets.save({ planning: A, execution: B, execution2: null }, null, {});
+  await skipped.controller.switchTo('planning', 's1');
+  assert.equal(skipped.notices[0][1], true);
 });

@@ -1,6 +1,6 @@
 'use strict';
 const React = require('react');
-const { Button, Modal, Switch, Toast, Tooltip, IconDataOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
+const { Button, Modal, Toast, Tooltip, IconDataOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
 const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, removeTeamSlot, syncShortcuts, PresetStore,
   RoleSwitcher, sameSelection, findModel, validateSelection, currentMainSession, shortcutFor } = require('./core.cjs');
 const h = React.createElement;
@@ -16,9 +16,8 @@ const css = `
 .dsh-model-roles-select{width:100%;min-width:0;height:36px;padding:0 10px;font:inherit;color-scheme:light dark;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm)}
 .dsh-model-roles-select option,.dsh-model-roles-select optgroup{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
 .dsh-model-roles-select:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
-.dsh-model-roles-team{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:28px}
-.dsh-model-roles-team-label{font-size:13px;color:var(--dsw-alias-label-secondary)}
-.dsh-model-roles-team-note{color:var(--dsw-alias-label-tertiary)}
+.dsh-model-roles-team{flex:0 0 auto;min-width:0}
+.dsh-model-roles-team .dsh-model-roles-select{width:auto}
 .dsh-model-roles-help{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}
 .dsh-model-roles-error{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary)}
 `;
@@ -144,21 +143,28 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
             }, h('option', { value: '' }, '模型默认'),
               selection.reasoningEffort && !model.reasoning.efforts.some(level => level.id === selection.reasoningEffort)
                 ? h('option', { value: selection.reasoningEffort, disabled: true }, `${selection.reasoningEffort}（不可用）`) : null,
-              ...model.reasoning.efforts.map(level => h('option', { key: level.id, value: level.id }, level.name)))) : null),
-        teamReady ? h('div', { className: 'dsh-model-roles-team' },
-          h('span', { className: 'dsh-model-roles-team-label' }, '启用智能体团队协作',
-            // 未记录时不改团队状态；保存时会连同预设一起记下开关。
-            teamDraft[role] === undefined ? h('span', { className: 'dsh-model-roles-team-note' }, ' · 未设置') : null),
-          h(Switch, {
-            checked: teamDraft[role] === true,
-            disabled: loading || !!stored.error || stale,
-            label: `${roleLabel(role)}启用智能体团队协作`,
-            'data-model-roles-team': role,
-            onChange: enabled => {
-              setTeamDraft(current => ({ ...current, [role]: enabled }));
-              setError(null);
-            }
-          })) : null);
+              ...model.reasoning.efforts.map(level => h('option', { key: level.id, value: level.id }, level.name)))) : null,
+          // 团队协作状态跟模型、推理强度挤在同一行，省掉每槽多出的一行；未设置与显式关闭分开记。
+          teamReady ? h('div', { className: 'dsh-model-roles-control dsh-model-roles-team' },
+            h('select', {
+              id: `dsh-model-roles-${role}-team`, className: 'dsh-model-roles-select',
+              'aria-label': `${roleLabel(role)}启用智能体团队协作`,
+              value: teamDraft[role] === undefined ? '' : teamDraft[role] ? 'on' : 'off',
+              disabled: loading || !!stored.error || stale, 'data-model-roles-team': role,
+              onChange: event => {
+                const choice = event.target.value;
+                setTeamDraft(current => {
+                  const next = { ...current };
+                  // 选“未设置”只是不记录，切换预设时不动团队状态；选“关闭”才会主动关掉。
+                  if (choice === '') delete next[role]; else next[role] = choice === 'on';
+                  return next;
+                });
+                setError(null);
+              }
+            },
+              h('option', { value: '' }, '团队协作 · 未设置'),
+              h('option', { value: 'on' }, '团队协作 · 开启'),
+              h('option', { value: 'off' }, '团队协作 · 关闭'))) : null));
     }),
     h(Button, { disabled: loading || !!stored.error || stale, 'data-model-roles-add': '',
       onClick: () => { setDraft(current => addExecution(current)); setError(null); }

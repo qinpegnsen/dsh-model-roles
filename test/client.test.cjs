@@ -107,6 +107,14 @@ test('every slot has one model selector and an unlabelled reasoning selector in 
   assert.match(f.client.ui.css, /\.dsh-model-roles-row\{display:flex;align-items:flex-end/);
 });
 
+test('dialog opts into the wider container and keeps the model column readable', () => {
+  const f = fixture();
+  const modal = f.render('ConfigDialog');
+  assert.equal(modal.props.className, 'dsh-model-roles-modal');
+  assert.match(f.client.ui.css, /\.dsh-model-roles-modal\.dsh-model-roles-modal\{width:min\(680px,100%\)\}/);
+  assert.match(f.client.ui.css, /\.dsh-model-roles-model\{flex:1;min-width:220px\}/);
+});
+
 test('dialog no longer renders the removed description and help paragraphs', () => {
   const f = fixture();
   const modal = f.render('ConfigDialog');

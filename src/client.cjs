@@ -1,7 +1,7 @@
 'use strict';
 const React = require('react');
 const { Button, Modal, Toast, Tooltip, IconDataOutlineRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
-const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, removeTeamSlot, syncShortcuts, PresetStore,
+const { STORAGE_KEY, rolesFor, roleLabel, addPreset, removePreset, removeTeamPreset, syncShortcuts, PresetStore,
   RoleSwitcher, sameSelection, findModel, validateSelection, currentMainSession, shortcutFor } = require('./core.cjs');
 const h = React.createElement;
 
@@ -77,33 +77,35 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
       onClose();
     });
   };
+  const roles = rolesFor(draft);
   const bindings = useStore(shortcuts.catalog);
   const keyLabel = role => {
     const registered = bindings.find(item => item.id === `model-roles.${role}`);
     return registered ? registered.keys.join('') : defaultKeyLabel(role);
   };
   return h(Modal, {
-    open: true, onClose, title: '规划／执行模型', closeLabel: '关闭', shortcutModal: 'model-roles.config',
+    open: true, onClose, title: '模型预设', closeLabel: '关闭', shortcutModal: 'model-roles.config',
     className: 'dsh-model-roles-modal',
     footer: h(React.Fragment, null,
       h(Button, { onClick: onClose }, '取消'),
       h(Button, { variant: 'primary', disabled: loading || !loaded || !!stored.error || stale, onClick: save, 'data-model-roles-save': '' }, '保存'))
   }, h('div', { className: 'dsh-model-roles-config' },
-    ...rolesFor(draft).map((role, index) => {
+    ...roles.map((role, index) => {
       const selection = draft[role];
       const model = findModel(catalog.groups, selection);
       const selectedKey = selection ? JSON.stringify([selection.provider, selection.model]) : '';
       return h('div', { key: role, className: 'dsh-model-roles-field' },
         h('div', { className: 'dsh-model-roles-heading' },
           h('label', { htmlFor: `dsh-model-roles-${role}` }, roleLabel(role) + (keyLabel(role) ? ` · ${keyLabel(role)}` : '')),
-          role !== 'planning' ? h(Button, { size: 'sm', disabled: loading || !!stored.error || stale,
+          h(Button, { size: 'sm', disabled: loading || !!stored.error || stale || roles.length <= 1,
+            title: roles.length <= 1 ? '至少保留一个预设模型' : undefined,
             'aria-label': `删除${roleLabel(role)}`,
             onClick: () => {
-              setDraft(current => removeExecution(current, role));
-              setTeamDraft(current => removeTeamSlot(draft, current, role));
+              setDraft(current => removePreset(current, role));
+              setTeamDraft(current => removeTeamPreset(draft, current, role));
               setError(null);
             }
-          }, '删除') : null),
+          }, '删除')),
         h('div', { className: 'dsh-model-roles-row' },
           h('div', { className: 'dsh-model-roles-control dsh-model-roles-model' },
             h('select', {
@@ -169,8 +171,8 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
               h('option', { value: 'off' }, '团队协作 · 关闭'))) : null));
     }),
     h(Button, { disabled: loading || !!stored.error || stale, 'data-model-roles-add': '',
-      onClick: () => { setDraft(current => addExecution(current)); setError(null); }
-    }, '添加执行模型'),
+      onClick: () => { setDraft(current => addPreset(current)); setError(null); }
+    }, '添加预设模型'),
     catalog.failures.length ? h('p', { className: 'dsh-model-roles-help' }, '部分提供方目录加载失败；只列出当前可用模型。') : null,
     stored.error || stale || error ? h('p', { role: 'alert', className: 'dsh-model-roles-error' },
       stored.error || (stale ? '配置已在其他窗口修改，请关闭后重新打开。' : error)) : null));
@@ -197,7 +199,7 @@ function Toolbar({ directory, controller, presets, shortcuts, available, session
         variant: 'toolbar', size: 'sm', disabled: busy,
         'aria-label': `配置模型预设，当前${triggerLabel}`,
         'aria-haspopup': 'dialog',
-        'data-dsh-model-roles': '', 'data-dsh-model-role-active': activeRole || 'none',
+        'data-dsh-model-roles': '', 'data-dsh-model-preset-active': activeRole || 'none',
         icon: h(IconDataOutlineRegular, { size: 16 }),
         onClick: () => { presets.reload(); setConfig(true); }
       }, triggerLabel)),

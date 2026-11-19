@@ -1,37 +1,49 @@
 'use strict';
 
 const STORAGE_KEY = 'dsh.model-roles.v1';
-const emptyPresets = () => ({ planning: null, execution: null, execution2: null });
+const emptyPresets = () => ({ preset1: null, preset2: null, preset3: null });
 
-/** Execution slots are named execution, execution2, execution3… in display order. */
-const executionKey = number => (number === 1 ? 'execution' : `execution${number}`);
+/** Preset slots are named preset1, preset2, preset3… in display order. */
+const presetKey = number => `preset${number}`;
 
-/** Keep only explicit booleans for known roles; unknown or non-boolean entries are dropped. */
-function normalizeTeam(team) {
-  const next = {};
-  for (const [role, enabled] of Object.entries(team || {})) {
-    if (typeof enabled === 'boolean' && (role === 'planning' || executionNumber(role) !== null)) next[role] = enabled;
-  }
-  return next;
+function presetNumber(role) {
+  if (!/^preset[1-9][0-9]*$/.test(role)) return null;
+  const number = Number(role.slice(6));
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
 }
 
-function executionNumber(role) {
+/** Roles written by 0.1.x–0.2.x: one planning slot plus execution, execution2… */
+function legacyNumber(role) {
   if (role === 'execution') return 1;
   if (!/^execution[1-9][0-9]*$/.test(role)) return null;
   const number = Number(role.slice(9));
   return Number.isSafeInteger(number) && number >= 2 ? number : null;
 }
 
+const legacyKey = number => (number === 1 ? 'execution' : `execution${number}`);
+
+function legacyRoles(keys) {
+  return ['planning', ...Object.keys(keys).filter(role => role !== 'planning')
+    .sort((a, b) => legacyNumber(a) - legacyNumber(b))];
+}
+
+/** Keep only explicit booleans for known presets; unknown or non-boolean entries are dropped. */
+function normalizeTeam(team) {
+  const next = {};
+  for (const [role, enabled] of Object.entries(team || {})) {
+    if (typeof enabled === 'boolean' && presetNumber(role) !== null) next[role] = enabled;
+  }
+  return next;
+}
+
 function rolesFor(presets) {
-  return ['planning', ...Object.keys(presets).filter(role => role !== 'planning')
-    .sort((a, b) => executionNumber(a) - executionNumber(b))];
+  return Object.keys(presets).sort((a, b) => presetNumber(a) - presetNumber(b));
 }
 
 function roleLabel(role) {
-  if (role === 'planning') return '规划模型';
-  const number = executionNumber(role);
-  if (number === null) throw new Error('未知模型角色。');
-  return `执行模型${number}`;
+  const number = presetNumber(role);
+  if (number === null) throw new Error('未知模型预设。');
+  return `预设模型${number}`;
 }
 
 /** Rebuild a per-role map over the slots left after `drop`, renumbering by position. */
@@ -40,25 +52,27 @@ function remapRoles(presets, values, drop) {
   let number = 1;
   for (const role of rolesFor(presets)) {
     if (role === drop) continue;
-    const key = role === 'planning' ? 'planning' : executionKey(number++);
+    const key = presetKey(number++);
     if (Object.hasOwn(values, role)) next[key] = values[role];
   }
   return next;
 }
 
-/** Add one unconfigured execution slot at the end; returns a new preset object. */
-function addExecution(presets) {
-  return { ...presets, [executionKey(rolesFor(presets).length)]: null };
+/** Add one unconfigured preset slot at the end; returns a new preset object. */
+function addPreset(presets) {
+  return { ...presets, [presetKey(rolesFor(presets).length + 1)]: null };
 }
 
-/** Remove one execution slot and renumber the rest, preserving every selection. */
-function removeExecution(presets, role) {
-  if (role === 'planning' || !Object.hasOwn(presets, role)) throw new Error('只能删除已有的执行模型。');
+/** Remove one preset slot and renumber the rest, preserving every selection. */
+function removePreset(presets, role) {
+  const roles = rolesFor(presets);
+  if (!roles.includes(role)) throw new Error('该模型预设不存在。');
+  if (roles.length <= 1) throw new Error('至少保留一个预设模型。');
   return remapRoles(presets, presets, role);
 }
 
-/** Move Team flags onto the same positions after an execution slot is removed. */
-function removeTeamSlot(presets, team, role) {
+/** Move Team flags onto the same positions after a preset slot is removed. */
+function removeTeamPreset(presets, team, role) {
   return remapRoles(presets, normalizeTeam(team), role);
 }
 
@@ -84,32 +98,53 @@ function parseTeam(team, roles) {
   return next;
 }
 
-/** Parse the stored document into presets plus the per-role Team flags. */
+/** Map 0.1.x–0.2.x roles onto flat preset positions: 规划模型→1，执行模型 N→N+1。 */
+function migrateLegacy(presets) {
+  return Object.fromEntries(legacyRoles(presets).map((role, index) => [presetKey(index + 1), presets[role]]));
+}
+
+function migrateTeam(team, legacyPresets) {
+  const next = {};
+  legacyRoles(legacyPresets).forEach((role, index) => {
+    if (Object.hasOwn(team, role)) next[presetKey(index + 1)] = team[role];
+  });
+  return next;
+}
+
+/** Parse the stored document into flat presets plus the per-preset Team flags. */
 function parseDocument(raw) {
   if (raw === null) return { presets: emptyPresets(), team: {} };
   const doc = JSON.parse(raw);
   const invalid = () => { throw new Error(INVALID_DOCUMENT); };
-  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || ![1, 2, 3].includes(doc.version)
-    || doc.presets === null || typeof doc.presets !== 'object' || Array.isArray(doc.presets)
-    || !Object.hasOwn(doc.presets, 'planning')) invalid();
-  const allowed = doc.version === 3 ? ['version', 'presets', 'team'] : ['version', 'presets'];
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || ![1, 2, 3, 4].includes(doc.version)
+    || doc.presets === null || typeof doc.presets !== 'object' || Array.isArray(doc.presets)) invalid();
+  const allowed = doc.version === 3 || doc.version === 4 ? ['version', 'presets', 'team'] : ['version', 'presets'];
   if (Object.keys(doc).some(key => !allowed.includes(key))) invalid();
   const keys = Object.keys(doc.presets);
-  if (keys.some(role => role !== 'planning' && executionNumber(role) === null)
-    || keys.some(role => doc.presets[role] !== null && !isSelection(doc.presets[role]))) invalid();
+  const validSelections = () => keys.some(role => doc.presets[role] !== null && !isSelection(doc.presets[role]));
   if (doc.version === 1) {
-    // 0.1.x and the first 0.2.0 draft stored either two or three slots.
-    if (!Object.hasOwn(doc.presets, 'execution')
-      || keys.some(role => !['planning', 'execution', 'execution2'].includes(role))) invalid();
-    return {
-      presets: { planning: doc.presets.planning, execution: doc.presets.execution, execution2: doc.presets.execution2 ?? null },
-      team: {}
-    };
+    // 0.1.x and the first 0.2.0 draft stored either two or three fixed slots.
+    if (!Object.hasOwn(doc.presets, 'planning') || !Object.hasOwn(doc.presets, 'execution')
+      || keys.some(role => !['planning', 'execution', 'execution2'].includes(role))
+      || validSelections()) invalid();
+    const legacy = { planning: doc.presets.planning, execution: doc.presets.execution, execution2: doc.presets.execution2 ?? null };
+    return { presets: migrateLegacy(legacy), team: {} };
   }
+  if (doc.version < 4) {
+    if (!Object.hasOwn(doc.presets, 'planning')
+      || keys.some(role => role !== 'planning' && legacyNumber(role) === null)
+      || validSelections()) invalid();
+    const roles = legacyRoles(doc.presets);
+    if (roles.slice(1).some((role, index) => role !== legacyKey(index + 1))) invalid();
+    const team = parseTeam(doc.version === 3 ? doc.team : undefined, roles);
+    return { presets: migrateLegacy(doc.presets), team: migrateTeam(team, doc.presets) };
+  }
+  // Version 4 is the flat list: contiguous preset1…presetN, at least one slot.
+  if (!keys.length || keys.some(role => presetNumber(role) === null) || validSelections()) invalid();
   const roles = rolesFor(doc.presets);
-  if (roles.slice(1).some((role, index) => role !== executionKey(index + 1))) invalid();
-  const presets = Object.fromEntries(roles.map(role => [role, doc.presets[role]]));
-  return { presets, team: doc.version === 3 ? parseTeam(doc.team, roles) : {} };
+  if (roles.some((role, index) => role !== presetKey(index + 1))) invalid();
+  return { presets: Object.fromEntries(roles.map(role => [role, doc.presets[role]])),
+    team: parseTeam(doc.team, roles) };
 }
 
 function parsePresets(raw) {
@@ -160,7 +195,7 @@ class PresetStore {
     }
   }
   save(presets, expectedRevision, team = {}) {
-    const raw = JSON.stringify({ version: 3, presets, team: normalizeTeam(team) });
+    const raw = JSON.stringify({ version: 4, presets, team: normalizeTeam(team) });
     const checked = parseDocument(raw);
     const before = this.storage.getItem(STORAGE_KEY);
     parseDocument(before);
@@ -217,7 +252,7 @@ class RoleSwitcher {
       if (!sameSelection(directory.store.getSnapshot().current, selection)) {
         throw new Error('模型切换结果尚未同步，请核对输入框旁的当前模型，不要重复切换。');
       }
-      // 团队协作标记随预设走：只应用明确记录过的角色，未记录的角色保持当前状态。
+      // 团队协作标记随预设走：只应用明确记录过的预设，未记录的保持当前状态。
       const team = saved.team[role];
       if (typeof team === 'boolean') {
         const failure = await this.setTeam(sessionId, team);
@@ -243,9 +278,10 @@ function currentMainSession(sessions, layout) {
 }
 
 function shortcutFor(role, resolveTarget, switchTo) {
-  // 规划模型 Digit1；执行模型 N 使用 Digit(N+1)，第 10 个起复用 Digit0，更多角色由用户自行绑定。
-  const digit = role === 'planning' ? 1 : executionNumber(role) + 1;
-  const binding = digit <= 10 ? { code: `Digit${digit % 10}`, modifiers: ['primary', 'alt'] } : undefined;
+  // 预设模型 N 使用 DigitN（1–9），第 10 个复用 Digit0，更多预设由用户自行绑定。
+  const number = presetNumber(role);
+  if (number === null) throw new Error('未知模型预设。');
+  const binding = number <= 10 ? { code: `Digit${number % 10}`, modifiers: ['primary', 'alt'] } : undefined;
   return {
     id: `model-roles.${role}`,
     label: () => `切换到${roleLabel(role)}`,
@@ -281,6 +317,6 @@ function syncShortcuts(presets, register, resolveTarget, switchTo) {
   return () => { unsubscribe(); for (const dispose of registered.values()) dispose(); registered.clear(); };
 }
 
-module.exports = { STORAGE_KEY, rolesFor, roleLabel, executionNumber, addExecution, removeExecution,
-  removeTeamSlot, normalizeTeam, parseDocument, syncShortcuts, parsePresets, sameSelection, findModel,
+module.exports = { STORAGE_KEY, rolesFor, roleLabel, presetNumber, addPreset, removePreset,
+  removeTeamPreset, normalizeTeam, parseDocument, syncShortcuts, parsePresets, sameSelection, findModel,
   validateSelection, PresetStore, RoleSwitcher, currentMainSession, shortcutFor };

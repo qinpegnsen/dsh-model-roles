@@ -90,20 +90,20 @@ function fixture() {
   return { client, props, presets, stateRef, render, applies, writes: () => writes, closes: () => closes, raw: () => raw };
 }
 
-test('every slot has one model selector and an unlabelled reasoning selector in the same row', () => {
+test('every preset has one model selector and an unlabelled reasoning selector in the same row', () => {
   const f = fixture();
   const tree = f.render('ConfigDialog');
   const rows = walk(tree, node => node.props.className === 'dsh-model-roles-row');
   assert.equal(rows.length, 3);
   const selects = row => walk(row, node => node.type === 'select');
   assert.deepEqual(selects(rows[0]).map(node => node.props.id),
-    ['dsh-model-roles-planning', 'dsh-model-roles-planning-effort', 'dsh-model-roles-planning-team']);
+    ['dsh-model-roles-preset1', 'dsh-model-roles-preset1-effort', 'dsh-model-roles-preset1-team']);
   assert.deepEqual(selects(rows[1]).map(node => node.props.id),
-    ['dsh-model-roles-execution', 'dsh-model-roles-execution-team']);
+    ['dsh-model-roles-preset2', 'dsh-model-roles-preset2-team']);
   assert.deepEqual(selects(rows[2]).map(node => node.props.id),
-    ['dsh-model-roles-execution2', 'dsh-model-roles-execution2-team']);
+    ['dsh-model-roles-preset3', 'dsh-model-roles-preset3-team']);
   assert.equal(walk(tree, node => node.type === 'label' && node.children.join('') === '推理强度').length, 0);
-  assert.equal(walk(tree, node => node.props['aria-label'] === '规划模型推理强度').length, 1);
+  assert.equal(walk(tree, node => node.props['aria-label'] === '预设模型1推理强度').length, 1);
   assert.match(f.client.ui.css, /\.dsh-model-roles-row\{display:flex;align-items:flex-end/);
 });
 
@@ -111,6 +111,7 @@ test('dialog opts into the wider container and keeps the model column readable',
   const f = fixture();
   const modal = f.render('ConfigDialog');
   assert.equal(modal.props.className, 'dsh-model-roles-modal');
+  assert.equal(modal.props.title, '模型预设');
   assert.match(f.client.ui.css, /\.dsh-model-roles-modal\.dsh-model-roles-modal\{width:min\(680px,100%\)\}/);
   assert.match(f.client.ui.css, /\.dsh-model-roles-model\{flex:1;min-width:220px\}/);
 });
@@ -123,17 +124,17 @@ test('dialog no longer renders the removed description and help paragraphs', () 
   assert.deepEqual(paragraphs, []);
 });
 
-test('new slots show their default shortcut and configured bindings still win', () => {
+test('new presets show their default shortcut and configured bindings still win', () => {
   const f = fixture();
   let tree = f.render('ConfigDialog');
   walk(tree, node => Object.hasOwn(node.props, 'data-model-roles-add'))[0].props.onClick();
   tree = f.render('ConfigDialog');
   const label = role => walk(tree, node => node.type === 'label' && node.props.htmlFor === `dsh-model-roles-${role}`)[0].children.join('');
-  assert.equal(label('execution3'), '执行模型3 · Ctrl + Alt + 4');
-  f.props.shortcuts.catalog.getSnapshot = () => [{ id: 'model-roles.execution', keys: ['Ctrl', '+', 'Shift', '+', 'X'] }];
+  assert.equal(label('preset4'), '预设模型4 · Ctrl + Alt + 4');
+  f.props.shortcuts.catalog.getSnapshot = () => [{ id: 'model-roles.preset2', keys: ['Ctrl', '+', 'Shift', '+', 'X'] }];
   tree = f.render('ConfigDialog');
   const configured = role => walk(tree, node => node.type === 'label' && node.props.htmlFor === `dsh-model-roles-${role}`)[0].children.join('');
-  assert.equal(configured('execution'), '执行模型1 · Ctrl+Shift+X');
+  assert.equal(configured('preset2'), '预设模型2 · Ctrl+Shift+X');
 });
 
 test('add and delete only change the draft; cancel writes nothing', () => {
@@ -143,33 +144,43 @@ test('add and delete only change the draft; cancel writes nothing', () => {
   walk(tree, node => Object.hasOwn(node.props, 'data-model-roles-add'))[0].props.onClick();
   tree = f.render('ConfigDialog');
   assert.equal(walk(tree, node => node.props.className === 'dsh-model-roles-row').length, 4);
-  walk(tree, node => node.props['aria-label'] === '删除执行模型1')[0].props.onClick();
+  walk(tree, node => node.props['aria-label'] === '删除预设模型1')[0].props.onClick();
   tree = f.render('ConfigDialog');
   assert.equal(walk(tree, node => node.props.className === 'dsh-model-roles-row').length, 3);
-  assert.equal(walk(tree, node => node.props['aria-label'] === '删除规划模型').length, 0);
   walk(tree.props.footer, node => node.type === 'Button' && node.children.join('') === '取消')[0].props.onClick();
   assert.equal(f.closes(), 1);
   assert.equal(f.writes(), 0);
   assert.equal(f.raw(), before);
 });
 
-test('saving a new slot persists version 3; the toolbar button opens the dialog directly', () => {
+test('the last remaining preset cannot be deleted', () => {
+  const f = fixture();
+  f.presets.reload();
+  f.presets.save({ preset1: { provider: 'p', model: 'plain' } }, f.presets.getSnapshot().revision);
+  const tree = f.render('ConfigDialog');
+  assert.equal(walk(tree, node => node.props.className === 'dsh-model-roles-row').length, 1);
+  const remove = walk(tree, node => node.props['aria-label'] === '删除预设模型1')[0];
+  assert.equal(remove.props.disabled, true);
+  assert.equal(remove.props.title, '至少保留一个预设模型');
+});
+
+test('saving a new preset persists version 4; the toolbar button opens the dialog directly', () => {
   const f = fixture();
   let tree = f.render('ConfigDialog');
   walk(tree, node => Object.hasOwn(node.props, 'data-model-roles-add'))[0].props.onClick();
   tree = f.render('ConfigDialog');
-  walk(tree, node => node.props.id === 'dsh-model-roles-execution3')[0]
+  walk(tree, node => node.props.id === 'dsh-model-roles-preset4')[0]
     .props.onChange({ target: { value: JSON.stringify(['p', 'reasoning']) } });
   tree = f.render('ConfigDialog');
-  walk(tree, node => node.props.id === 'dsh-model-roles-execution3-effort')[0]
+  walk(tree, node => node.props.id === 'dsh-model-roles-preset4-effort')[0]
     .props.onChange({ target: { value: '' } });
   tree = f.render('ConfigDialog');
   walk(tree.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save'))[0].props.onClick();
   assert.equal(f.writes(), 1);
   const saved = JSON.parse(f.raw());
-  assert.equal(saved.version, 3);
-  assert.deepEqual(saved.presets.execution3, { provider: 'p', model: 'reasoning' });
-  assert.equal(saved.presets.execution2, null);
+  assert.equal(saved.version, 4);
+  assert.deepEqual(saved.presets.preset4, { provider: 'p', model: 'reasoning' });
+  assert.equal(saved.presets.preset3, null);
 
   const toolbar = f.render('Toolbar');
   assert.equal(walk(toolbar, node => node.type === 'Menu').length, 0, '不再渲染中间菜单');
@@ -189,10 +200,10 @@ test('active preset is reflected in the button label and tooltip', () => {
   f.stateRef.current = { provider: 'p', model: 'plain' };
   const toolbar = f.render('Toolbar');
   const trigger = walk(toolbar, node => node.props && node.props['data-dsh-model-roles'] !== undefined)[0];
-  assert.equal(trigger.children.join(''), '执行模型1');
-  assert.equal(trigger.props['data-dsh-model-role-active'], 'execution');
+  assert.equal(trigger.children.join(''), '预设模型2');
+  assert.equal(trigger.props['data-dsh-model-preset-active'], 'preset2');
   const tooltip = walk(toolbar, node => node.type === 'Tooltip')[0];
-  assert.match(String(tooltip.props.label), /执行模型1：Plain/);
+  assert.match(String(tooltip.props.label), /预设模型2：Plain/);
 });
 
 test('toolbar tooltip escapes the composer containing block without changing its trigger', () => {
@@ -204,12 +215,12 @@ test('toolbar tooltip escapes the composer containing block without changing its
   assert.equal(tooltip.children[0].props['aria-haspopup'], 'dialog');
 });
 
-test('each slot carries its own team dropdown inside the preset row', () => {
+test('each preset carries its own team dropdown inside the preset row', () => {
   const f = fixture();
   let tree = f.render('ConfigDialog');
   const teamSelects = () => walk(tree, node => node.type === 'select' && Object.hasOwn(node.props, 'data-model-roles-team'));
-  assert.deepEqual(teamSelects().map(node => node.props['data-model-roles-team']), ['planning', 'execution', 'execution2']);
-  assert.ok(teamSelects().every(node => node.props.value === ''), '未记录的槽默认显示未设置');
+  assert.deepEqual(teamSelects().map(node => node.props['data-model-roles-team']), ['preset1', 'preset2', 'preset3']);
+  assert.ok(teamSelects().every(node => node.props.value === ''), '未记录的预设默认显示未设置');
 
   // 团队协作下拉放在模型/推理强度那一行，不再额外占一行。
   const rows = walk(tree, node => node.props.className === 'dsh-model-roles-row');
@@ -224,7 +235,7 @@ test('each slot carries its own team dropdown inside the preset row', () => {
   teamSelects()[0].props.onChange({ target: { value: 'on' } });
   tree = f.render('ConfigDialog');
   assert.equal(teamSelects()[0].props.value, 'on');
-  assert.equal(teamSelects()[1].props.value, '', '各槽独立记录，互不影响');
+  assert.equal(teamSelects()[1].props.value, '', '各预设独立记录，互不影响');
   teamSelects()[0].props.onChange({ target: { value: 'off' } });
   tree = f.render('ConfigDialog');
   assert.equal(teamSelects()[0].props.value, 'off', '显式关闭与未设置分开记');
@@ -238,13 +249,13 @@ test('saving stores team flags with the preset and applies the active one', asyn
   const f = fixture();
   f.stateRef.current = { provider: 'p', model: 'plain' };
   let tree = f.render('ConfigDialog');
-  walk(tree, node => node.type === 'select' && node.props['data-model-roles-team'] === 'execution')[0].props.onChange({ target: { value: 'on' } });
+  walk(tree, node => node.type === 'select' && node.props['data-model-roles-team'] === 'preset2')[0].props.onChange({ target: { value: 'on' } });
   tree = f.render('ConfigDialog');
   walk(tree.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save'))[0].props.onClick();
   await Promise.resolve();
   const saved = JSON.parse(f.raw());
-  assert.equal(saved.version, 3);
-  assert.deepEqual(saved.team, { execution: true });
+  assert.equal(saved.version, 4);
+  assert.deepEqual(saved.team, { preset2: true });
   assert.deepEqual(f.applies, [['session', true]], '当前生效的预设保存后立即同步团队开关');
   assert.equal(f.closes(), 1);
 });
@@ -252,9 +263,9 @@ test('saving stores team flags with the preset and applies the active one', asyn
 test('saving the active preset re-applies its recorded team flag', async () => {
   const f = fixture();
   f.presets.reload();
-  f.presets.save({ planning: { provider: 'p', model: 'reasoning', reasoningEffort: 'high' },
-    execution: { provider: 'p', model: 'plain' }, execution2: null },
-  f.presets.getSnapshot().revision, { planning: true });
+  f.presets.save({ preset1: { provider: 'p', model: 'reasoning', reasoningEffort: 'high' },
+    preset2: { provider: 'p', model: 'plain' }, preset3: null },
+  f.presets.getSnapshot().revision, { preset1: true });
   f.stateRef.current = { provider: 'p', model: 'reasoning', reasoningEffort: 'high' };
   const tree = f.render('ConfigDialog');
   walk(tree.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save'))[0].props.onClick();
@@ -292,19 +303,19 @@ test('team row is hidden when the host offers no team switch', () => {
   assert.equal(walk(tree, node => String(node.props.className).includes('dsh-model-roles-team')).length, 0);
 });
 
-test('removing a slot moves its team flag to the next position', () => {
+test('removing a preset moves its team flag to the next position', () => {
   const f = fixture();
   f.presets.reload();
-  f.presets.save({ planning: { provider: 'p', model: 'reasoning', reasoningEffort: 'high' },
-    execution: { provider: 'p', model: 'plain' }, execution2: null },
-  f.presets.getSnapshot().revision, { planning: true, execution: true });
+  f.presets.save({ preset1: { provider: 'p', model: 'reasoning', reasoningEffort: 'high' },
+    preset2: { provider: 'p', model: 'plain' }, preset3: null },
+  f.presets.getSnapshot().revision, { preset1: true, preset2: true });
   let tree = f.render('ConfigDialog');
-  walk(tree, node => node.props['aria-label'] === '删除执行模型1')[0].props.onClick();
+  walk(tree, node => node.props['aria-label'] === '删除预设模型1')[0].props.onClick();
   tree = f.render('ConfigDialog');
   const teamSelects = walk(tree, node => node.type === 'select' && Object.hasOwn(node.props, 'data-model-roles-team'));
   assert.deepEqual(teamSelects.map(node => node.props.value), ['on', '']);
   walk(tree.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save'))[0].props.onClick();
-  assert.deepEqual(JSON.parse(f.raw()).team, { planning: true });
+  assert.deepEqual(JSON.parse(f.raw()).team, { preset1: true });
 });
 
 test('team apply failure keeps the dialog open with the host message', async () => {
@@ -312,7 +323,7 @@ test('team apply failure keeps the dialog open with the host message', async () 
   f.stateRef.current = { provider: 'p', model: 'reasoning', reasoningEffort: 'high' };
   f.props.team.apply = async () => '只能在主会话上切换团队协作。';
   let tree = f.render('ConfigDialog');
-  walk(tree, node => node.type === 'select' && node.props['data-model-roles-team'] === 'planning')[0].props.onChange({ target: { value: 'on' } });
+  walk(tree, node => node.type === 'select' && node.props['data-model-roles-team'] === 'preset1')[0].props.onChange({ target: { value: 'on' } });
   tree = f.render('ConfigDialog');
   walk(tree.props.footer, node => Object.hasOwn(node.props, 'data-model-roles-save'))[0].props.onClick();
   await Promise.resolve();

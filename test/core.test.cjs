@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { STORAGE_KEY, rolesFor, roleLabel, addExecution, removeExecution, removeTeamSlot, syncShortcuts,
+const { STORAGE_KEY, rolesFor, roleLabel, addPreset, removePreset, removeTeamPreset, syncShortcuts,
   parseDocument, parsePresets, PresetStore, RoleSwitcher, sameSelection, validateSelection, currentMainSession,
   shortcutFor } = require('../src/core.cjs');
 const A = { provider: 'provider-a', model: 'model-1', reasoningEffort: 'high' };
@@ -11,10 +11,10 @@ const groups = [
   { id: 'provider-b', name: 'B', models: [{ id: 'model-1', name: 'Executor' }] }
 ];
 const plain = value => JSON.parse(JSON.stringify(value));
-const execution = n => (n === 1 ? 'execution' : `execution${n}`);
+const preset = n => `preset${n}`;
 const many = count => {
-  const presets = { planning: A };
-  for (let n = 1; n <= count; n++) presets[execution(n)] = n % 2 ? B : C;
+  const presets = {};
+  for (let n = 1; n <= count; n++) presets[preset(n)] = n % 3 === 1 ? A : n % 2 ? B : C;
   return presets;
 };
 function storage(initial = null) {
@@ -42,28 +42,45 @@ function fixture(options = {}) {
   return { controller, presets, adapter, directory, calls, notices, setState: patch => { state = { ...state, ...patch }; } };
 }
 
-test('first run and version 1 documents migrate without losing selections', () => {
+test('first run and version 1 documents migrate into a flat preset list', () => {
   assert.equal(STORAGE_KEY, 'dsh.model-roles.v1');
-  assert.deepEqual(plain(parsePresets(null)), { planning: null, execution: null, execution2: null });
-  assert.deepEqual(Array.from(rolesFor(parsePresets(null))), ['planning', 'execution', 'execution2']);
-  assert.equal(roleLabel('planning'), '规划模型');
-  assert.equal(roleLabel('execution'), '执行模型1');
-  assert.equal(roleLabel('execution3'), '执行模型3');
+  assert.deepEqual(plain(parsePresets(null)), { preset1: null, preset2: null, preset3: null });
+  assert.deepEqual(Array.from(rolesFor(parsePresets(null))), ['preset1', 'preset2', 'preset3']);
+  assert.equal(roleLabel('preset1'), '预设模型1');
+  assert.equal(roleLabel('preset3'), '预设模型3');
   const two = { version: 1, presets: { planning: A, execution: B } };
-  assert.deepEqual(plain(parsePresets(JSON.stringify(two))), { planning: A, execution: B, execution2: null });
+  assert.deepEqual(plain(parsePresets(JSON.stringify(two))), { preset1: A, preset2: B, preset3: null });
   const three = { version: 1, presets: { planning: A, execution: B, execution2: C } };
-  assert.deepEqual(plain(parsePresets(JSON.stringify(three))), three.presets);
+  assert.deepEqual(plain(parsePresets(JSON.stringify(three))), { preset1: A, preset2: B, preset3: C });
+});
+
+test('version 2 and 3 documents migrate without losing order or team flags', () => {
+  const legacy = { version: 3, presets: { planning: A, execution: B, execution2: C },
+    team: { planning: true, execution: false, execution2: true } };
+  const parsed = parseDocument(JSON.stringify(legacy));
+  assert.deepEqual(plain(parsed.presets), { preset1: A, preset2: B, preset3: C });
+  assert.deepEqual(plain(parsed.team), { preset1: true, preset2: false, preset3: true });
+  const noTeam = { version: 2, presets: { planning: A, execution: B, execution2: null } };
+  assert.deepEqual(plain(parseDocument(JSON.stringify(noTeam)).team), {});
 });
 
 test('invalid or unsupported documents are rejected instead of silently fixed', () => {
   for (const value of ['null', '[]', '{}', '{',
+    JSON.stringify({ version: 4, presets: {} }),
+    JSON.stringify({ version: 4, presets: { preset2: A } }),
+    JSON.stringify({ version: 4, presets: { preset1: A, preset3: B } }),
+    JSON.stringify({ version: 4, presets: { planning: A } }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: { planning: true } }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: { preset1: 'yes' } }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: { preset1: null } }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: [] }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: { preset2: true } }),
+    JSON.stringify({ version: 4, presets: { preset1: null }, team: {}, extra: true }),
+    JSON.stringify({ version: 4, presets: { preset1: { ...A, extra: 'no' } } }),
+    JSON.stringify({ version: 4, presets: [] }),
     JSON.stringify({ version: 3, presets: { planning: null }, team: { unknown: true } }),
     JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: 'yes' } }),
-    JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: null } }),
-    JSON.stringify({ version: 3, presets: { planning: null }, team: [] }),
-    JSON.stringify({ version: 3, presets: { planning: null }, team: null }),
     JSON.stringify({ version: 3, presets: { planning: null }, team: { execution: true } }),
-    JSON.stringify({ version: 3, presets: { planning: null }, team: {}, extra: true }),
     JSON.stringify({ version: 2, presets: { planning: null }, extra: true }),
     JSON.stringify({ version: 2, presets: [] }),
     JSON.stringify({ version: 2, presets: null }),
@@ -75,26 +92,27 @@ test('invalid or unsupported documents are rejected instead of silently fixed', 
     JSON.stringify({ version: 2, presets: { planning: null, execution: null, execution02: null } }),
     JSON.stringify({ version: 1, presets: { planning: A } }),
     JSON.stringify({ version: 1, presets: { planning: A, execution: B, execution3: C } }),
-    JSON.stringify({ version: 2, presets: { planning: { provider: 'x', model: '' } } }),
-    JSON.stringify({ version: 2, presets: { planning: { ...A, extra: 'no' } } })]) {
+    JSON.stringify({ version: 1, presets: { planning: A, preset2: B } }),
+    JSON.stringify({ version: 2, presets: { planning: { provider: 'x', model: '' } } })]) {
     assert.throws(() => parsePresets(value));
   }
 });
 
-test('adding and removing slots never mutates input and renumbers by position', () => {
+test('adding and removing presets never mutates input and renumbers by position', () => {
   const original = Object.freeze(many(4));
   const before = JSON.stringify(original);
-  const added = addExecution(original);
-  assert.equal(added.execution5, null);
+  const added = addPreset(original);
+  assert.equal(added.preset5, null);
   for (const role of Object.keys(original)) assert.deepEqual(plain(added[role]), plain(original[role]));
-  const removed = removeExecution(original, 'execution2');
-  assert.deepEqual(Array.from(rolesFor(removed)), ['planning', 'execution', 'execution2', 'execution3']);
-  assert.deepEqual(plain(removed.execution), plain(original.execution));
-  assert.deepEqual(plain(removed.execution2), plain(original.execution3));
-  assert.deepEqual(plain(removed.execution3), plain(original.execution4));
-  assert.deepEqual(plain(removeExecution({ planning: A, execution: B }, 'execution')), { planning: A });
-  assert.throws(() => removeExecution(original, 'planning'), /执行模型/);
-  assert.throws(() => removeExecution(original, 'execution9'), /执行模型/);
+  const removed = removePreset(original, 'preset2');
+  assert.deepEqual(Array.from(rolesFor(removed)), ['preset1', 'preset2', 'preset3']);
+  assert.deepEqual(plain(removed.preset1), plain(original.preset1));
+  assert.deepEqual(plain(removed.preset2), plain(original.preset3));
+  assert.deepEqual(plain(removed.preset3), plain(original.preset4));
+  assert.deepEqual(plain(removePreset({ preset1: A, preset2: B }, 'preset1')), { preset1: B });
+  assert.throws(() => removePreset({ preset1: A }, 'preset1'), /至少保留/);
+  assert.throws(() => removePreset(original, 'preset9'), /不存在/);
+  assert.throws(() => removePreset(original, 'planning'), /不存在/);
   assert.equal(JSON.stringify(original), before);
 });
 
@@ -109,27 +127,27 @@ test('exact provider, model and reasoning, not name or model-only match', () => 
   assert.throws(() => validateSelection(groups, { ...B, provider: 'missing' }), /不可用/);
 });
 
-test('save writes version 3 and detects stale cross-tab edits', () => {
+test('save writes version 4 and detects stale cross-tab edits', () => {
   const adapter = storage();
   const first = new PresetStore(adapter);
   const second = new PresetStore(adapter);
-  first.save({ planning: A, execution: null, execution2: null, execution3: B }, null);
-  assert.equal(JSON.parse(adapter.read()).version, 3);
+  first.save({ preset1: A, preset2: null, preset3: null, preset4: B }, null);
+  assert.equal(JSON.parse(adapter.read()).version, 4);
   assert.deepEqual(plain(new PresetStore(adapter).getSnapshot().presets),
-    { planning: A, execution: null, execution2: null, execution3: B });
-  assert.throws(() => second.save({ planning: null, execution: B, execution2: null }, null), /其他窗口/);
+    { preset1: A, preset2: null, preset3: null, preset4: B });
+  assert.throws(() => second.save({ preset1: null, preset2: B, preset3: null }, null), /其他窗口/);
   second.reload();
-  assert.deepEqual(plain(second.getSnapshot().presets), { planning: A, execution: null, execution2: null, execution3: B });
+  assert.deepEqual(plain(second.getSnapshot().presets), { preset1: A, preset2: null, preset3: null, preset4: B });
 });
 
 test('storage failure preserves accepted presets and surfaces errors', () => {
   const adapter = storage();
   const store = new PresetStore(adapter);
-  const presets = { planning: A, execution: B, execution2: null };
+  const presets = { preset1: A, preset2: B, preset3: null };
   store.save(presets, null);
   const before = store.getSnapshot();
   adapter.setItem = () => { throw new Error('quota'); };
-  assert.throws(() => store.save({ planning: null, execution: null, execution2: null }, before.revision), /quota/);
+  assert.throws(() => store.save({ preset1: null, preset2: null, preset3: null }, before.revision), /quota/);
   assert.equal(store.getSnapshot(), before);
   adapter.getItem = () => { throw new Error('read denied'); };
   store.reload();
@@ -139,77 +157,77 @@ test('storage failure preserves accepted presets and surfaces errors', () => {
 
 test('saves verify readback and reject malformed stored data', () => {
   const store = new PresetStore({ getItem: () => null, setItem: () => {} });
-  assert.throws(() => store.save({ planning: A, execution: B, execution2: null }, null), /读回不一致/);
+  assert.throws(() => store.save({ preset1: A, preset2: B, preset3: null }, null), /读回不一致/);
   const corrupt = new PresetStore(storage('invalid'));
   assert.ok(corrupt.getSnapshot().error);
-  assert.throws(() => corrupt.save({ planning: A, execution: B, execution2: null }, 'invalid'));
+  assert.throws(() => corrupt.save({ preset1: A, preset2: B, preset3: null }, 'invalid'));
 });
 
-test('any execution slot switches with its own exact selection', async () => {
+test('any preset switches with its own exact selection', async () => {
   const f = fixture();
   const presets = many(12);
   f.presets.save(presets, f.presets.getSnapshot().revision);
-  await f.controller.switchTo('planning', 's1');
-  await f.controller.switchTo('execution12', 's1');
-  assert.deepEqual(f.calls, [A, presets.execution12]);
+  await f.controller.switchTo('preset1', 's1');
+  await f.controller.switchTo('preset12', 's1');
+  assert.deepEqual(f.calls, [A, presets.preset12]);
   assert.ok(f.notices.every(([, success]) => success));
-  assert.match(f.notices[1][0], /执行模型12/);
+  assert.match(f.notices[1][0], /预设模型12/);
 });
 
 test('selecting current preset avoids repeated host write', async () => {
   const f = fixture();
-  f.presets.save({ planning: A, execution: B, execution2: null }, null);
-  await f.controller.switchTo('execution', 's1');
+  f.presets.save({ preset1: A, preset2: B, preset3: null }, null);
+  await f.controller.switchTo('preset2', 's1');
   assert.equal(f.calls.length, 0);
-  assert.match(f.notices[0][0], /当前已是执行模型1/);
+  assert.match(f.notices[0][0], /当前已是预设模型2/);
 });
 
 test('missing, deleted and unavailable presets never fall back or submit', async () => {
   const f = fixture();
-  f.presets.save({ planning: null, execution: B, execution2: null }, null);
-  await f.controller.switchTo('planning', 's1');
+  f.presets.save({ preset1: null, preset2: B, preset3: null }, null);
+  await f.controller.switchTo('preset1', 's1');
   assert.match(f.notices[0][0], /配置模型预设/);
-  await f.controller.switchTo('execution3', 's1');
+  await f.controller.switchTo('preset9', 's1');
   assert.match(f.notices[1][0], /已删除/);
   f.setState({ groups: [] });
-  await f.controller.switchTo('execution', 's1');
+  await f.controller.switchTo('preset2', 's1');
   assert.match(f.notices[2][0], /不可用/);
   assert.equal(f.calls.length, 0);
 });
 
 test('host rejection and unconfirmed sync never show success', async () => {
   const rejected = fixture();
-  rejected.presets.save({ planning: A, execution: B, execution2: null }, null);
+  rejected.presets.save({ preset1: A, preset2: B, preset3: null }, null);
   rejected.directory.select = async () => ({ ok: false, error: { code: 'denied', message: 'writer held' } });
-  await rejected.controller.switchTo('planning', 's1');
+  await rejected.controller.switchTo('preset1', 's1');
   assert.deepEqual(rejected.notices, [['writer held', false]]);
   const unconfirmed = fixture();
-  unconfirmed.presets.save({ planning: A, execution: B, execution2: null }, null);
+  unconfirmed.presets.save({ preset1: A, preset2: B, preset3: null }, null);
   unconfirmed.directory.select = async () => ({ ok: true });
-  await unconfirmed.controller.switchTo('planning', 's1');
+  await unconfirmed.controller.switchTo('preset1', 's1');
   assert.match(unconfirmed.notices[0][0], /尚未同步/);
   assert.equal(unconfirmed.notices[0][1], false);
 });
 
 test('pending host switch and unsupported session refuse write', async () => {
   const pending = fixture();
-  pending.presets.save({ planning: A, execution: B, execution2: null }, null);
+  pending.presets.save({ preset1: A, preset2: B, preset3: null }, null);
   pending.setState({ pending: A });
-  await pending.controller.switchTo('planning', 's1');
+  await pending.controller.switchTo('preset1', 's1');
   assert.equal(pending.calls.length, 0);
   const child = fixture({ isAvailable: () => false });
-  await child.controller.switchTo('planning', 'child');
+  await child.controller.switchTo('preset1', 'child');
   assert.equal(child.calls.length, 0);
   assert.match(child.notices[0][0], /不支持/);
 });
 
 test('repeat presses serialize per session, capture target before await', async () => {
   const f = fixture();
-  f.presets.save({ planning: A, execution: B, execution2: null }, null);
+  f.presets.save({ preset1: A, preset2: B, preset3: null }, null);
   let release;
   f.directory.load = () => new Promise(resolve => { release = () => resolve(f.directory.store.getSnapshot()); });
-  const first = f.controller.switchTo('planning', 's1');
-  await f.controller.switchTo('execution', 's1');
+  const first = f.controller.switchTo('preset1', 's1');
+  await f.controller.switchTo('preset2', 's1');
   release();
   await first;
   assert.deepEqual(f.calls, [A]);
@@ -219,13 +237,13 @@ test('repeat presses serialize per session, capture target before await', async 
 test('closed session or unloaded plugin cannot submit late selection', async () => {
   let available = true;
   const f = fixture({ isAvailable: () => available });
-  f.presets.save({ planning: A, execution: B, execution2: null }, null);
+  f.presets.save({ preset1: A, preset2: B, preset3: null }, null);
   f.directory.load = async () => { available = false; return f.directory.store.getSnapshot(); };
-  await f.controller.switchTo('planning', 's1');
+  await f.controller.switchTo('preset1', 's1');
   assert.equal(f.calls.length, 0);
   const unloaded = fixture({ isAlive: () => false });
-  unloaded.presets.save({ planning: A, execution: B, execution2: null }, null);
-  await unloaded.controller.switchTo('planning', 's1');
+  unloaded.presets.save({ preset1: A, preset2: B, preset3: null }, null);
+  await unloaded.controller.switchTo('preset1', 's1');
   assert.equal(unloaded.calls.length, 0);
   assert.equal(unloaded.notices.length, 0);
 });
@@ -250,22 +268,22 @@ test('main-view targeting ignores other panels, side sessions and addressed chil
 test('shortcuts keep stable ids and sequential digit defaults', () => {
   let current = 'first';
   const calls = [];
-  const planning = shortcutFor('planning', () => current, (...args) => calls.push(args));
-  assert.equal(planning.id, 'model-roles.planning');
-  assert.deepEqual(planning.defaults['web:macos'], { code: 'Digit1', modifiers: ['primary', 'alt'] });
-  assert.deepEqual(planning.regions, ['page', 'editable']);
-  assert.deepEqual(planning.modals, []);
-  const action = planning.resolve();
+  const first = shortcutFor('preset1', () => current, (...args) => calls.push(args));
+  assert.equal(first.id, 'model-roles.preset1');
+  assert.deepEqual(first.defaults['web:macos'], { code: 'Digit1', modifiers: ['primary', 'alt'] });
+  assert.deepEqual(first.regions, ['page', 'editable']);
+  assert.deepEqual(first.modals, []);
+  const action = first.resolve();
   current = 'second';
   action.run();
-  assert.deepEqual(calls, [['planning', 'first']]);
+  assert.deepEqual(calls, [['preset1', 'first']]);
   current = undefined;
-  assert.equal(planning.resolve().status, 'pass');
-  for (let n = 1; n <= 8; n++) {
-    assert.equal(shortcutFor(execution(n), () => undefined, () => {}).defaults['web:windows'].code, `Digit${n + 1}`);
+  assert.equal(first.resolve().status, 'pass');
+  for (let n = 1; n <= 9; n++) {
+    assert.equal(shortcutFor(preset(n), () => undefined, () => {}).defaults['web:windows'].code, `Digit${n}`);
   }
-  assert.equal(shortcutFor('execution9', () => undefined, () => {}).defaults['web:windows'].code, 'Digit0');
-  assert.deepEqual(shortcutFor('execution10', () => undefined, () => {}).defaults, {});
+  assert.equal(shortcutFor('preset10', () => undefined, () => {}).defaults['web:windows'].code, 'Digit0');
+  assert.deepEqual(shortcutFor('preset11', () => undefined, () => {}).defaults, {});
 });
 
 test('registered shortcuts follow saved additions and deletions and clean up on unload', () => {
@@ -278,14 +296,14 @@ test('registered shortcuts follow saved additions and deletions and clean up on 
     active.add(definition.id);
     return () => { assert.equal(active.delete(definition.id), true); disposed++; };
   }, () => undefined, () => {});
-  assert.deepEqual([...active], ['model-roles.planning', 'model-roles.execution', 'model-roles.execution2']);
+  assert.deepEqual([...active], ['model-roles.preset1', 'model-roles.preset2', 'model-roles.preset3']);
   presets.save(many(5), presets.getSnapshot().revision);
-  assert.equal(active.size, 6);
-  presets.save({ planning: A }, presets.getSnapshot().revision);
-  assert.deepEqual([...active], ['model-roles.planning']);
+  assert.equal(active.size, 5);
+  presets.save({ preset1: A }, presets.getSnapshot().revision);
+  assert.deepEqual([...active], ['model-roles.preset1']);
   dispose();
   assert.equal(active.size, 0);
-  assert.equal(disposed, 6);
+  assert.equal(disposed, 5);
 });
 
 test('corrupt stored data surfaces an error and keeps the last good snapshot', () => {
@@ -299,51 +317,51 @@ test('corrupt stored data surfaces an error and keeps the last good snapshot', (
   assert.deepEqual(plain(presets.getSnapshot().presets), plain(good.presets));
 });
 
-test('version 3 documents carry per-role team flags and reject unknown roles', () => {
-  const doc = { version: 3, presets: { planning: A, execution: B, execution2: null },
-    team: { planning: true, execution: false } };
+test('version 4 documents carry per-preset team flags and reject unknown roles', () => {
+  const doc = { version: 4, presets: { preset1: A, preset2: B, preset3: null },
+    team: { preset1: true, preset2: false } };
   const parsed = parseDocument(JSON.stringify(doc));
   assert.deepEqual(plain(parsed.presets), doc.presets);
-  assert.deepEqual(plain(parsed.team), { planning: true, execution: false });
+  assert.deepEqual(plain(parsed.team), { preset1: true, preset2: false });
   assert.deepEqual(plain(parseDocument(null).team), {});
-  assert.deepEqual(plain(parseDocument(JSON.stringify({ version: 2, presets: { planning: A, execution: B, execution2: null } })).team), {});
-  assert.throws(() => parseDocument(JSON.stringify({ version: 3, presets: { planning: null }, team: { planning: true, execution: true } })), /格式不正确/);
-  assert.throws(() => parseDocument(JSON.stringify({ version: 3, presets: { planning: null }, team: 'yes' })), /格式不正确/);
+  assert.deepEqual(plain(parseDocument(JSON.stringify({ version: 4, presets: { preset1: null } })).team), {});
+  assert.throws(() => parseDocument(JSON.stringify({ version: 4, presets: { preset1: null }, team: { planning: true } })), /格式不正确/);
+  assert.throws(() => parseDocument(JSON.stringify({ version: 4, presets: { preset1: null }, team: 'yes' })), /格式不正确/);
 });
 
-test('team flags follow their execution slot when another slot is removed', () => {
+test('team flags follow their preset when another preset is removed', () => {
   const presets = many(3);
-  const team = { planning: true, execution: false, execution2: true, execution3: false };
-  const after = removeTeamSlot(presets, team, 'execution');
-  assert.deepEqual(after, { planning: true, execution: true, execution2: false });
-  assert.deepEqual(removeTeamSlot(presets, team, 'execution2'), { planning: true, execution: false, execution2: false });
-  assert.deepEqual(removeTeamSlot({ planning: A, execution: B }, { planning: true }, 'execution'), { planning: true });
+  const team = { preset1: true, preset2: false, preset3: true };
+  const after = removeTeamPreset(presets, team, 'preset1');
+  assert.deepEqual(after, { preset1: false, preset2: true });
+  assert.deepEqual(removeTeamPreset(presets, team, 'preset2'), { preset1: true, preset2: true });
+  assert.deepEqual(removeTeamPreset({ preset1: A, preset2: B }, { preset1: true }, 'preset1'), {});
 });
 
 test('saving presets stores team flags and switching applies them', async () => {
   const adapter = storage();
   const store = new PresetStore(adapter);
-  store.save({ planning: A, execution: B, execution2: null }, null, { planning: true, unknown: true, execution: 'yes' });
-  assert.deepEqual(plain(JSON.parse(adapter.read()).team), { planning: true });
-  assert.deepEqual(plain(store.getSnapshot().team), { planning: true });
+  store.save({ preset1: A, preset2: B, preset3: null }, null, { preset1: true, unknown: true, preset2: 'yes' });
+  assert.deepEqual(plain(JSON.parse(adapter.read()).team), { preset1: true });
+  assert.deepEqual(plain(store.getSnapshot().team), { preset1: true });
   const applied = [];
   const f = fixture({ setTeam: async (sessionId, enabled) => { applied.push([sessionId, enabled]); return null; } });
-  f.presets.save({ planning: A, execution: B, execution2: null }, null, { planning: true, execution: false });
-  await f.controller.switchTo('planning', 's1');
-  await f.controller.switchTo('execution', 's1');
+  f.presets.save({ preset1: A, preset2: B, preset3: null }, null, { preset1: true, preset2: false });
+  await f.controller.switchTo('preset1', 's1');
+  await f.controller.switchTo('preset2', 's1');
   assert.deepEqual(applied, [['s1', true], ['s1', false]]);
   assert.ok(f.notices.every(([, success]) => success));
 });
 
 test('team switch failures surface without claiming a clean switch', async () => {
   const failing = fixture({ setTeam: async () => 'root required' });
-  failing.presets.save({ planning: A, execution: B, execution2: null }, null, { planning: true });
-  await failing.controller.switchTo('planning', 's1');
+  failing.presets.save({ preset1: A, preset2: B, preset3: null }, null, { preset1: true });
+  await failing.controller.switchTo('preset1', 's1');
   assert.match(failing.notices[0][0], /团队协作开关设置失败：root required/);
   assert.equal(failing.notices[0][1], false);
   assert.equal(failing.calls.length, 1);
   const skipped = fixture();
-  skipped.presets.save({ planning: A, execution: B, execution2: null }, null, {});
-  await skipped.controller.switchTo('planning', 's1');
+  skipped.presets.save({ preset1: A, preset2: B, preset3: null }, null, {});
+  await skipped.controller.switchTo('preset1', 's1');
   assert.equal(skipped.notices[0][1], true);
 });

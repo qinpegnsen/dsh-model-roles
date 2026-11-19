@@ -4,10 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const presetsDocument = count => JSON.stringify({ version: 2, presets: Object.fromEntries([
-  ['planning', null],
-  ...Array.from({ length: count }, (_, index) => [index === 0 ? 'execution' : `execution${index + 1}`, null])
-]) });
+const presetsDocument = count => JSON.stringify({ version: 4, presets: Object.fromEntries(
+  Array.from({ length: count }, (_, index) => [`preset${index + 1}`, null])
+) });
 
 test('bundle declares transitive session remote and regenerates shortcuts with presets', () => {
   let exports;
@@ -61,21 +60,21 @@ test('bundle declares transitive session remote and regenerates shortcuts with p
   assert.equal(styles.length, 1);
   assert.equal(seats.get('model-roles').descriptor.inject('ordinary-session').directory.sessionId, 'ordinary-session');
 
-  // 与其他标签页同步：新增执行模型后快捷键随之注册，删除后随之释放。
+  // 与其他标签页同步：新增预设后快捷键随之注册，删除后随之释放。
   stored = presetsDocument(6);
   listeners.get('storage')({ key: 'dsh.model-roles.v1' });
-  assert.equal(commands.size, 7);
-  assert.deepEqual([...commands.keys()].filter(id => id === 'model-roles.execution6'), ['model-roles.execution6']);
+  assert.equal(commands.size, 6);
+  assert.deepEqual([...commands.keys()].filter(id => id === 'model-roles.preset6'), ['model-roles.preset6']);
 
   stored = presetsDocument(2);
   listeners.get('storage')({ key: 'dsh.model-roles.v1' });
-  assert.equal(commands.size, 3);
-  assert.equal(commands.has('model-roles.execution3'), false);
+  assert.equal(commands.size, 2);
+  assert.equal(commands.has('model-roles.preset3'), false);
 
   // 读取失败时不按旧快照增删快捷键。
   stored = 'invalid';
   listeners.get('storage')({ key: 'dsh.model-roles.v1' });
-  assert.equal(commands.size, 3);
+  assert.equal(commands.size, 2);
 
   for (const dispose of disposers.reverse()) if (typeof dispose === 'function') dispose();
   assert.equal(commands.size, 0);

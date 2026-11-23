@@ -27,6 +27,77 @@ function useStore(store) {
   return React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 
+// CodeBuddy 设置页的「模型选择」开关只作用于它自己的菜单；这里的下拉读的是 DSH 统一模型目录，
+// 所以复用同一份 hiddenModels（命名空间 llm-codebuddy）做同源过滤，两处看到的一致。
+const CODEBUDDY_PROVIDER = 'codebuddy';
+const CODEBUDDY_SETTINGS_NAMESPACE = 'llm-codebuddy';
+const NO_HIDDEN = Object.freeze({ provider: CODEBUDDY_PROVIDER, ids: new Set() });
+
+function hiddenModelsBridge(ctx) {
+  const listeners = new Set();
+  let form = null;
+  let unsubscribe = null;
+  let state = NO_HIDDEN;
+  let disposed = false;
+  const read = () => {
+    if (!form) return NO_HIDDEN;
+    let value;
+    try { value = form.getSnapshot?.()?.value; } catch { return NO_HIDDEN; }
+    const ids = Array.isArray(value?.hiddenModels) ? value.hiddenModels.filter(id => typeof id === 'string') : [];
+    return ids.length ? { provider: CODEBUDDY_PROVIDER, ids: new Set(ids) } : NO_HIDDEN;
+  };
+  const publish = () => { state = read(); for (const listener of [...listeners]) listener(); };
+  // 不把 configForms 放进该插件的 inject：那是「等它就绪才 apply」的硬依赖，取不到会让整个插件不加载。
+  // 改用非严格反射按需取；服务晚到也能在后续读取时补上，长期取不到就退化为不过滤（按秒节流，避免每帧重试）。
+  let attemptedAt = 0;
+  const acquire = () => {
+    if (disposed || form) return;
+    const now = Date.now();
+    if (now - attemptedAt < 1000) return;
+    attemptedAt = now;
+    try {
+      let forms = null;
+      try { forms = ctx.reflect?.get?.('configForms', false) || null; } catch { forms = null; }
+      if (!forms?.get) { try { forms = ctx.configForms || null; } catch { forms = null; } }
+      if (!forms?.get) return;
+      const controller = forms.get(CODEBUDDY_SETTINGS_NAMESPACE);
+      if (!controller?.getSnapshot) return;
+      form = controller;
+      state = read();
+      unsubscribe = controller.subscribe?.(publish) || null;
+    } catch { form = null; unsubscribe = null; }
+  };
+  acquire();
+  return {
+    getSnapshot: () => { acquire(); return state; },
+    subscribe: listener => {
+      listeners.add(listener);
+      acquire();
+      return () => listeners.delete(listener);
+    },
+    dispose: () => {
+      disposed = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+      unsubscribe = null;
+      listeners.clear();
+      form = null;
+      state = NO_HIDDEN;
+    }
+  };
+}
+
+/** 隐藏的模型从下拉里去掉；已选中的那个始终保留，否则 <select> 会显示成空白。 */
+function filterHiddenGroups(groups, hidden, selections) {
+  if (!hidden || hidden.ids.size === 0) return groups;
+  const selected = new Set(selections.filter(Boolean).map(item => `${item.provider}/${item.model}`));
+  return groups
+    .map(group => group.id !== hidden.provider ? group : {
+      ...group,
+      models: group.models.filter(model => !hidden.ids.has(model.id) || selected.has(`${group.id}/${model.id}`))
+    })
+    .filter(group => group.models.length > 0);
+}
+
 function modelTitle(selection, groups) {
   if (!selection) return '未配置';
   const name = findModel(groups, selection)?.name || `${selection.provider}/${selection.model}`;
@@ -41,9 +112,10 @@ function defaultKeyLabel(role) {
   return `${mac ? '⌘' : 'Ctrl'} + Alt + ${binding.code.slice(5)}`;
 }
 
-function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose }) {
+function ConfigDialog({ directory, presets, shortcuts, sessionId, team, hidden, onClose }) {
   const stored = useStore(presets);
   const catalog = useStore(directory.store);
+  const hiddenState = useStore(hidden);
   const [initial] = React.useState(() => ({ revision: stored.revision, presets: stored.presets }));
   const [draft, setDraft] = React.useState(initial.presets);
   const [teamDraft, setTeamDraft] = React.useState(() => ({ ...stored.team }));
@@ -61,6 +133,8 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
   }, [directory]);
   const stale = stored.revision !== (savedRevision ?? initial.revision);
   const teamReady = Boolean(team?.available);
+  // 只影响下拉里列什么；findModel/validateSelection 仍用完整目录，已保存的预设不会因此失效。
+  const visibleGroups = filterHiddenGroups(catalog.groups, hiddenState, rolesFor(draft).map(role => draft[role]));
   const save = () => {
     try {
       for (const role of rolesFor(draft)) if (draft[role]) validateSelection(catalog.groups, draft[role]);
@@ -127,7 +201,7 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
             },
               h('option', { value: '' }, loading ? '正在读取模型目录…' : '未配置'),
               selection && !model ? h('option', { value: selectedKey, disabled: true }, `${selection.provider}/${selection.model}（不可用）`) : null,
-              ...catalog.groups.map(group => h('optgroup', { label: group.name, key: group.id },
+              ...visibleGroups.map(group => h('optgroup', { label: group.name, key: group.id },
                 ...group.models.map(item => h('option', { value: JSON.stringify([group.id, item.id]), key: item.id }, item.name)))))),
           model?.reasoning ? h('div', { className: 'dsh-model-roles-control dsh-model-roles-effort' },
             h('select', {
@@ -178,7 +252,7 @@ function ConfigDialog({ directory, presets, shortcuts, sessionId, team, onClose 
       stored.error || (stale ? '配置已在其他窗口修改，请关闭后重新打开。' : error)) : null));
 }
 
-function Toolbar({ directory, controller, presets, shortcuts, available, sessionId, team }) {
+function Toolbar({ directory, controller, presets, shortcuts, available, sessionId, team, hidden }) {
   const saved = useStore(presets);
   const state = useStore(directory.store);
   const [config, setConfig] = React.useState(false);
@@ -203,7 +277,7 @@ function Toolbar({ directory, controller, presets, shortcuts, available, session
         icon: h(IconDataOutlineRegular, { size: 16 }),
         onClick: () => { presets.reload(); setConfig(true); }
       }, triggerLabel)),
-    config ? h(ConfigDialog, { directory, presets, shortcuts, sessionId, team, onClose: () => setConfig(false) }) : null);
+    config ? h(ConfigDialog, { directory, presets, shortcuts, sessionId, team, hidden, onClose: () => setConfig(false) }) : null);
 }
 
 function Notification({ source }) {
@@ -239,10 +313,12 @@ function teamBridge(ctx) {
 }
 
 // Cordis 服务调用沿调用者的注入作用域解析；directoryFor 的传递依赖也需显式声明。
+// configForms 故意不在此列：它是可选增强，缺失时只退化为不过滤，不应阻止本插件加载。
 const inject = ['slots', 'modelDirectories', 'sessions', 'shortcuts', 'layout', 'remote', 'remote.session'];
 function apply(ctx) {
   let alive = true;
   const team = teamBridge(ctx);
+  const hidden = hiddenModelsBridge(ctx);
   const presets = new PresetStore({
     getItem: key => window.localStorage.getItem(key),
     setItem: (key, value) => window.localStorage.setItem(key, value)
@@ -270,7 +346,7 @@ function apply(ctx) {
     document.head.appendChild(style);
     const onStorage = event => { if (event.key === STORAGE_KEY || event.key === null) presets.reload(); };
     window.addEventListener('storage', onStorage);
-    return () => { alive = false; style.remove(); window.removeEventListener('storage', onStorage); listeners.clear(); };
+    return () => { alive = false; style.remove(); window.removeEventListener('storage', onStorage); listeners.clear(); hidden.dispose(); };
   }, 'model-roles: lifecycle');
   ctx.effect(() => syncShortcuts(presets,
     definition => ctx.shortcuts.register(definition),
@@ -279,7 +355,7 @@ function apply(ctx) {
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left', id: 'model-roles', order: 90,
     inject: sessionId => ({ directory: ctx.modelDirectories.directoryFor(sessionId), controller, presets,
-      shortcuts: ctx.shortcuts, sessionId, team, available: ctx.sessions.subagentAddress(sessionId) === undefined })
+      shortcuts: ctx.shortcuts, sessionId, team, hidden, available: ctx.sessions.subagentAddress(sessionId) === undefined })
   }, Toolbar));
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'model-roles.notice', inject: () => ({ source })

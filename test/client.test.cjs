@@ -25,7 +25,7 @@ function loadClient() {
   const primitives = Object.fromEntries(['Button', 'Modal', 'Toast', 'Tooltip', 'IconDataOutlineRegular']
     .map(name => [name, name]));
   const module = { exports: {} };
-  const factory = new Function('require', 'module', 'window', `${source}\nmodule.exports.__ui = { ConfigDialog, Toolbar, css, teamBridge };`);
+  const factory = new Function('require', 'module', 'window', `${source}\nmodule.exports.__ui = { ConfigDialog, Toolbar, css, teamBridge, filterHiddenGroups, hiddenModelsBridge };`);
   factory(name => {
     if (name === 'react') return React;
     if (name === '@deepseek-ai/dsh-client-ui-primitives') return primitives;
@@ -50,6 +50,17 @@ function walk(tree, predicate) {
   return [...(predicate(tree) ? [tree] : []), ...(tree.children || []).flatMap(child => walk(child, predicate))];
 }
 
+function hiddenStore(value = { provider: 'codebuddy', ids: new Set() }) {
+  const listeners = new Set();
+  const store = {
+    state: value,
+    getSnapshot: () => store.state,
+    subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    set: next => { store.state = next; for (const listener of [...listeners]) listener(); }
+  };
+  return store;
+}
+
 function fixture() {
   const client = loadClient();
   let raw = JSON.stringify({ version: 1, presets: {
@@ -57,6 +68,7 @@ function fixture() {
     execution: { provider: 'p', model: 'plain' },
     execution2: null
   } });
+  const hidden = hiddenStore();
   let writes = 0;
   let closes = 0;
   const applies = [];
@@ -75,6 +87,7 @@ function fixture() {
     sessionId: 'session',
     available: true,
     team: { available: true, apply: async (sessionId, enabled) => { applies.push([sessionId, enabled]); return null; } },
+    hidden,
     onClose: () => { closes++; }
   };
   // 首次渲染后标记目录已加载，跳过异步载入等待。
@@ -87,7 +100,7 @@ function fixture() {
     }
     return client.render(name, props);
   };
-  return { client, props, presets, stateRef, render, applies, writes: () => writes, closes: () => closes, raw: () => raw };
+  return { client, props, presets, stateRef, render, applies, hidden, catalog, writes: () => writes, closes: () => closes, raw: () => raw };
 }
 
 test('every preset has one model selector and an unlabelled reasoning selector in the same row', () => {
@@ -339,4 +352,61 @@ test('team apply failure keeps the dialog open with the host message', async () 
   assert.equal(retried.length, 1);
   assert.match(String(retried[0]), /只能在主会话上切换团队协作。/);
   assert.equal(f.closes(), 0);
+});
+
+test('hidden models are filtered out of the dropdown but a saved selection stays visible', () => {
+  const f = fixture();
+  f.catalog.groups.push({ id: 'codebuddy', name: 'CodeBuddy', models: [
+    { id: 'keep', name: 'Keep' }, { id: 'hidden', name: 'Hidden' }] });
+  const options = () => walk(f.render('ConfigDialog'), node => node.type === 'option').map(node => node.children.join(''));
+  assert.ok(options().includes('Hidden'), '没有隐藏记录时全部列出');
+
+  f.hidden.set({ provider: 'codebuddy', ids: new Set(['hidden']) });
+  assert.equal(options().includes('Hidden'), false, '隐藏的模型不再出现在下拉里');
+  assert.ok(options().includes('Keep'));
+
+  // 已选中的隐藏模型必须保留，否则 <select> 会显示成空白。
+  const selected = fixture();
+  selected.catalog.groups.push({ id: 'codebuddy', name: 'CodeBuddy', models: [
+    { id: 'keep', name: 'Keep' }, { id: 'hidden', name: 'Hidden' }] });
+  selected.presets.save({ preset1: { provider: 'codebuddy', model: 'hidden' }, preset2: null, preset3: null },
+    selected.presets.getSnapshot().revision);
+  selected.hidden.set({ provider: 'codebuddy', ids: new Set(['hidden']) });
+  const selectedOptions = walk(selected.render('ConfigDialog'), node => node.type === 'option').map(node => node.children.join(''));
+  assert.ok(selectedOptions.includes('Hidden'), '当前预设命中的隐藏模型仍可见');
+  assert.ok(selectedOptions.includes('Keep'), '同组其他可见模型照常列出');
+});
+
+test('hidden bridge filters only the declared provider and drops empty groups', () => {
+  const { filterHiddenGroups } = loadClient().ui;
+  const groups = [{ id: 'codebuddy', name: 'CodeBuddy', models: [{ id: 'a' }, { id: 'b' }] },
+    { id: 'other', name: 'Other', models: [{ id: 'a' }] }];
+  const hidden = { provider: 'codebuddy', ids: new Set(['a']) };
+  const filtered = filterHiddenGroups(groups, hidden, []);
+  assert.deepEqual(filtered.map(group => group.id), ['codebuddy', 'other']);
+  assert.deepEqual(filtered[0].models.map(model => model.id), ['b']);
+  assert.deepEqual(filtered[1].models.map(model => model.id), ['a'], '其他提供方不受影响');
+
+  const emptied = filterHiddenGroups([{ id: 'codebuddy', name: 'CodeBuddy', models: [{ id: 'a' }] }], hidden, []);
+  assert.deepEqual(emptied, [], '整体被隐藏的提供方不再出现空分组');
+  assert.equal(filterHiddenGroups(groups, { provider: 'codebuddy', ids: new Set() }, []), groups);
+});
+
+test('hidden bridge stays inactive when the settings service is missing', () => {
+  const { hiddenModelsBridge } = loadClient().ui;
+  const silent = hiddenModelsBridge({});
+  assert.deepEqual([...silent.getSnapshot().ids], [], '取不到服务时退化为不过滤');
+  const broken = hiddenModelsBridge({ reflect: { get: () => { throw new Error('boom'); } } });
+  assert.deepEqual([...broken.getSnapshot().ids], []);
+  let value = { hiddenModels: ['x', 42] };
+  const subscribers = new Set();
+  const controller = { getSnapshot: () => ({ value }), subscribe: fn => { subscribers.add(fn); return () => subscribers.delete(fn); } };
+  const bridge = hiddenModelsBridge({ reflect: { get: key => (key === 'configForms' ? { get: () => controller } : null) } });
+  assert.deepEqual([...bridge.getSnapshot().ids], ['x'], '只接受字符串 id');
+  value = { hiddenModels: [] };
+  for (const fn of [...subscribers]) fn();
+  assert.deepEqual([...bridge.getSnapshot().ids], [], '设置清空后经订阅通知不再过滤');
+  bridge.dispose();
+  assert.deepEqual([...bridge.getSnapshot().ids], []);
+  assert.equal(subscribers.size, 0, '卸载时取消订阅');
 });

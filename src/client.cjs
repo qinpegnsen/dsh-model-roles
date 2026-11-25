@@ -23,8 +23,13 @@ const css = `
 .dsh-model-roles-error{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary)}
 `;
 
+// 用闭包调用而不是直接传方法引用：DSH 的 ConfigFormController 等方法定义在原型上，
+// 脱离实例传递会丢 this，抛 "Cannot read properties of undefined (reading 'store')"，
+// 崩掉 conversation.input.left 槽位条目，工具栏按钮随之消失。
 function useStore(store) {
-  return React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const subscribe = React.useCallback(listener => store.subscribe(listener), [store]);
+  const snapshot = React.useCallback(() => store.getSnapshot(), [store]);
+  return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 // CodeBuddy 设置页的「模型选择」开关只作用于它自己的菜单；这里的下拉读的是 DSH 统一模型目录，

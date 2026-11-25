@@ -15,6 +15,7 @@ function loadClient() {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat().filter(child => child !== null && child !== undefined) }),
     Fragment: 'Fragment',
     useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
+    useCallback: fn => fn,
     useState: initial => {
       const key = cursor++;
       if (!(key in bucket)) bucket[key] = typeof initial === 'function' ? initial() : initial;
@@ -375,6 +376,23 @@ test('hidden models are filtered out of the dropdown but a saved selection stays
   const selectedOptions = walk(selected.render('ConfigDialog'), node => node.type === 'option').map(node => node.children.join(''));
   assert.ok(selectedOptions.includes('Hidden'), '当前预设命中的隐藏模型仍可见');
   assert.ok(selectedOptions.includes('Keep'), '同组其他可见模型照常列出');
+});
+
+test('a store whose methods live on its prototype still renders the dialog', () => {
+  // 复刻 DSH 的 ConfigFormController：方法挂原型、内部依赖 this。
+  // 直接把方法引用交给 useSyncExternalStore 会丢 this，实机上会崩掉输入槽位、按钮消失。
+  class PrototypeStore {
+    constructor(state) { this.state = state; }
+    getSnapshot() { return this.state; }
+    subscribe() { return () => {}; }
+  }
+  const f = fixture();
+  f.catalog.groups.push({ id: 'codebuddy', name: 'CodeBuddy', models: [
+    { id: 'keep', name: 'Keep' }, { id: 'hidden', name: 'Hidden' }] });
+  f.props.hidden = new PrototypeStore({ provider: 'codebuddy', ids: new Set(['hidden']) });
+  const options = walk(f.render('ConfigDialog'), node => node.type === 'option').map(node => node.children.join(''));
+  assert.ok(options.includes('Keep'), '原型方法取到快照后照常渲染');
+  assert.equal(options.includes('Hidden'), false, '隐藏过滤仍然生效');
 });
 
 test('hidden bridge filters only the declared provider and drops empty groups', () => {

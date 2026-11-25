@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-roles",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "模型预设：按顺序编号的模型预设清单，可增删、快捷切换当前对话模型，不改变权限或规划模式。",
   "repository": {
     "type": "git",
